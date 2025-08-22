@@ -47,10 +47,7 @@ export function detectEnvironment(): Environment {
 
         // Check if we're running on a ServiceNow domain
         const hostname = window.location.hostname;
-        const isServiceNowDomain = hostname.includes("service-now.com") || 
-                                   hostname.includes("servicenow.com") || 
-                                   hostname.includes(".service-now.com") || 
-                                   hostname.includes(".servicenow.com");
+        const isServiceNowDomain = hostname.includes("service-now.com") || hostname.includes("servicenow.com") || hostname.includes(".service-now.com") || hostname.includes(".servicenow.com");
 
         if (isServiceNowDomain) {
             cachedEnvironment = "production";
@@ -88,7 +85,8 @@ export function getEnvironmentConfig(): EnvironmentConfig {
         isDevelopment,
         baseUrl: isProduction ? "" : import.meta.env.VITE_INSTANCE_URL || "http://localhost:8080",
         useSessionAuth: isProduction,
-        tokenEndpoint: "/api/x_snc_cmdb_audit/app/get-token", // Updated endpoint for CMDB audit app
+        // tokenEndpoint: "/api/x_snc_cmdb_audit/app/get-token", // Updated endpoint for CMDB audit app
+        tokenEndpoint: "/api/x_elosa_api_benc_0/app/get-token", // DEV endpoint for API token
         username: isDevelopment ? import.meta.env.VITE_APP_USER : undefined,
         password: isDevelopment ? import.meta.env.VITE_APP_PASSWORD : undefined,
     };
