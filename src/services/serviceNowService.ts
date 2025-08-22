@@ -13,75 +13,17 @@ import {
   GraphNode,
   GraphEdge
 } from '../types';
+import { makeAuthenticatedRequest, testConnection as authTestConnection } from './authService';
 
 export class ServiceNowService {
-  private instance: ServiceNowInstance | null = null;
-
-  setInstance(instance: ServiceNowInstance) {
-    this.instance = instance;
+  // Test connection using the authentication service
+  async testConnection(): Promise<{ success: boolean; error?: string; responseTime?: number; mode?: string }> {
+    return authTestConnection();
   }
 
-  async testConnection(instance: ServiceNowInstance): Promise<{ success: boolean; error?: string; responseTime?: number }> {
-    const startTime = Date.now();
-    
-    try {
-      if (!instance.url || !instance.username || !instance.password) {
-        return { success: false, error: 'Missing required connection details' };
-      }
-
-      const credentials = btoa(`${instance.username}:${instance.password}`);
-      const url = `${instance.url.replace(/\/$/, '')}/api/now/table/sys_user?sysparm_limit=1`;
-
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Basic ${credentials}`,
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        }
-      });
-
-      const responseTime = Date.now() - startTime;
-
-      if (response.ok) {
-        return { success: true, responseTime };
-      } else {
-        let errorMessage = `HTTP ${response.status}`;
-        if (response.status === 401) {
-          errorMessage = 'Authentication failed - check credentials';
-        } else if (response.status === 403) {
-          errorMessage = 'Access forbidden - check user permissions';
-        } else if (response.status === 404) {
-          errorMessage = 'ServiceNow instance not found - check URL';
-        }
-        
-        return { success: false, error: errorMessage, responseTime };
-      }
-    } catch (error) {
-      const responseTime = Date.now() - startTime;
-      let errorMessage = 'Connection failed';
-      
-      if (error instanceof TypeError && error.message.includes('fetch')) {
-        errorMessage = 'Network error - check URL and connectivity';
-      } else if (error instanceof Error) {
-        errorMessage = error.message;
-      }
-
-      return { success: false, error: errorMessage, responseTime };
-    }
-  }
-
-  async getCurrentUser(instance: ServiceNowInstance): Promise<any> {
-    const credentials = btoa(`${instance.username}:${instance.password}`);
-    const url = `${instance.url.replace(/\/$/, '')}/api/now/table/sys_user?sysparm_query=user_name=${instance.username}&sysparm_limit=1`;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Basic ${credentials}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      }
+  async getCurrentUser(): Promise<any> {
+    const response = await makeAuthenticatedRequest('/api/now/table/sys_user/me', {
+      method: 'GET'
     });
 
     if (!response.ok) {
@@ -89,59 +31,21 @@ export class ServiceNowService {
     }
 
     const data = await response.json();
-    return data.result[0] || null;
+    return data.result || null;
   }
 
-  // Core API method with retry logic
+  // Core API method using authentication service
   private async makeRequest<T = any>(
     endpoint: string, 
-    options: RequestInit = {},
-    maxRetries: number = 3
+    options: RequestInit = {}
   ): Promise<ServiceNowResponse<T>> {
-    if (!this.instance) {
-      throw new Error('ServiceNow instance not configured');
+    const response = await makeAuthenticatedRequest(endpoint, options);
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
 
-    const credentials = btoa(`${this.instance.username}:${this.instance.password}`);
-    const url = `${this.instance.url.replace(/\/$/, '')}${endpoint}`;
-
-    const requestOptions: RequestInit = {
-      ...options,
-      headers: {
-        'Authorization': `Basic ${credentials}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        ...options.headers
-      }
-    };
-
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        const response = await fetch(url, requestOptions);
-
-        if (response.status === 429) {
-          // Rate limited - exponential backoff
-          const delay = Math.pow(2, attempt) * 1000;
-          await new Promise(resolve => setTimeout(resolve, delay));
-          continue;
-        }
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        return await response.json();
-      } catch (error) {
-        if (attempt === maxRetries) {
-          throw error;
-        }
-        
-        // Network error - linear backoff
-        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
-      }
-    }
-
-    throw new Error('Max retries exceeded');
+    return await response.json();
   }
 
   // CMDB Table Discovery Methods

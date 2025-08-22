@@ -1,21 +1,14 @@
-import { useState } from 'react';
-import { ServiceNowInstance, ConnectionStatus } from '../types';
+import { useState, useEffect } from 'react';
+import { ConnectionStatus } from '../types';
 import { serviceNowService } from '../services/serviceNowService';
+import { getAuthStatus, isDevelopmentMode } from '../services/authService';
+import { getEnvironmentInfo } from '../utils/environment';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
-import { Input } from './ui/input';
-import { Label } from './ui/label';
 import { Badge } from './ui/badge';
-import { CheckCircle, XCircle, Loader2, Wifi } from 'lucide-react';
+import { CheckCircle, XCircle, Loader2, Wifi, Settings, Info } from 'lucide-react';
 
 export function ConnectionTest() {
-  const [instance, setInstance] = useState<ServiceNowInstance>({
-    url: '',
-    username: '',
-    password: '',
-    name: 'Test Instance'
-  });
-
   const [status, setStatus] = useState<ConnectionStatus>({
     connected: false,
     testing: false
@@ -25,24 +18,24 @@ export function ConnectionTest() {
     success: boolean;
     error?: string;
     responseTime?: number;
+    mode?: string;
   } | null>(null);
 
-  const handleInputChange = (field: keyof ServiceNowInstance, value: string) => {
-    setInstance(prev => ({ ...prev, [field]: value }));
-    setTestResult(null);
-  };
+  const [authStatus, setAuthStatus] = useState(getAuthStatus());
+  const [environmentInfo, setEnvironmentInfo] = useState(getEnvironmentInfo());
+
+  useEffect(() => {
+    // Update auth status and environment info on component mount
+    setAuthStatus(getAuthStatus());
+    setEnvironmentInfo(getEnvironmentInfo());
+  }, []);
 
   const testConnection = async () => {
-    if (!instance.url || !instance.username || !instance.password) {
-      setTestResult({ success: false, error: 'Please fill in all fields' });
-      return;
-    }
-
     setStatus({ connected: false, testing: true });
     setTestResult(null);
 
     try {
-      const result = await serviceNowService.testConnection(instance);
+      const result = await serviceNowService.testConnection();
       setTestResult(result);
       setStatus({
         connected: result.success,
@@ -75,6 +68,14 @@ export function ConnectionTest() {
     return <Badge variant="outline" className="gap-1"><Wifi className="h-3 w-3" /> Not tested</Badge>;
   };
 
+  const getModeBadge = () => {
+    if (authStatus.isSessionAuth) {
+      return <Badge variant="default" className="gap-1"><Settings className="h-3 w-3" /> Production (Session)</Badge>;
+    } else {
+      return <Badge variant="secondary" className="gap-1"><Settings className="h-3 w-3" /> Development (Basic Auth)</Badge>;
+    }
+  };
+
   return (
     <div className="max-w-2xl mx-auto p-6">
       <Card>
@@ -84,46 +85,35 @@ export function ConnectionTest() {
             ServiceNow Connection Test
           </CardTitle>
           <CardDescription>
-            Test your ServiceNow instance connection to ensure the audit app can connect properly.
+            Test your ServiceNow connection. Authentication method is automatically determined based on the environment.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 gap-4">
-            <div>
-              <Label htmlFor="url">ServiceNow URL</Label>
-              <Input
-                id="url"
-                type="url"
-                placeholder="https://your-instance.service-now.com"
-                value={instance.url}
-                onChange={(e) => handleInputChange('url', e.target.value)}
-                disabled={status.testing}
-              />
+          {/* Authentication Mode Info */}
+          <div className="p-4 bg-muted rounded-lg">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-sm font-medium">Authentication Mode</h4>
+              {getModeBadge()}
             </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label htmlFor="username">Username</Label>
-                <Input
-                  id="username"
-                  type="text"
-                  placeholder="your.username"
-                  value={instance.username}
-                  onChange={(e) => handleInputChange('username', e.target.value)}
-                  disabled={status.testing}
-                />
-              </div>
-              <div>
-                <Label htmlFor="password">Password</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  placeholder="Your password"
-                  value={instance.password}
-                  onChange={(e) => handleInputChange('password', e.target.value)}
-                  disabled={status.testing}
-                />
-              </div>
+            <div className="text-sm text-muted-foreground">
+              {authStatus.isSessionAuth ? (
+                <div>
+                  <p>🔒 <strong>Production Mode:</strong> Using ServiceNow session token (g_ck) for authentication.</p>
+                  <p className="mt-1">• Credentials are handled automatically via ServiceNow session</p>
+                  <p>• No manual credential input required</p>
+                </div>
+              ) : (
+                <div>
+                  <p>🔧 <strong>Development Mode:</strong> Using basic authentication from environment variables.</p>
+                  <p className="mt-1">• Credentials loaded from .env file</p>
+                  <p>• Target instance: {environmentInfo.baseUrl || 'Not configured'}</p>
+                  {environmentInfo.hasCredentials ? (
+                    <p className="text-green-600">• ✓ Credentials configured</p>
+                  ) : (
+                    <p className="text-red-600">• ⚠ Credentials missing in .env file</p>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -133,7 +123,7 @@ export function ConnectionTest() {
             </div>
             <Button 
               onClick={testConnection}
-              disabled={status.testing || !instance.url || !instance.username || !instance.password}
+              disabled={status.testing || (!authStatus.ready && !environmentInfo.hasCredentials)}
               className="min-w-[120px]"
             >
               {status.testing ? (
@@ -160,6 +150,11 @@ export function ConnectionTest() {
                     <span className={`font-medium ${testResult.success ? 'text-green-700' : 'text-red-700'}`}>
                       {testResult.success ? 'Connection Successful!' : 'Connection Failed'}
                     </span>
+                    {testResult.mode && (
+                      <Badge variant="outline" className="ml-2">
+                        {testResult.mode}
+                      </Badge>
+                    )}
                   </div>
                   
                   {testResult.error && (
@@ -173,9 +168,14 @@ export function ConnectionTest() {
                   )}
                   
                   {testResult.success && (
-                    <p className="text-sm text-green-600 ml-6">
-                      Successfully connected to ServiceNow instance. The audit app is ready to use.
-                    </p>
+                    <div className="ml-6 text-sm space-y-1">
+                      <p className="text-green-600">
+                        ✓ Successfully connected to ServiceNow instance using {testResult.mode} mode.
+                      </p>
+                      <p className="text-green-600">
+                        ✓ The CMDB audit app is ready to analyze your ServiceNow configuration.
+                      </p>
+                    </div>
                   )}
                 </div>
               </CardContent>
@@ -186,6 +186,24 @@ export function ConnectionTest() {
             <p className="text-xs text-muted-foreground text-center">
               Last tested: {status.lastTested.toLocaleString()}
             </p>
+          )}
+
+          {/* Environment Debug Info (Development Mode Only) */}
+          {isDevelopmentMode() && (
+            <details className="mt-4">
+              <summary className="text-sm text-muted-foreground cursor-pointer hover:text-foreground">
+                <Info className="inline h-3 w-3 mr-1" />
+                Debug Information (Development Mode)
+              </summary>
+              <div className="mt-2 p-3 bg-muted rounded text-xs space-y-1">
+                <p><strong>Mode:</strong> {environmentInfo.mode}</p>
+                <p><strong>Base URL:</strong> {environmentInfo.baseUrl}</p>
+                <p><strong>Use Session Auth:</strong> {environmentInfo.useSessionAuth ? 'Yes' : 'No'}</p>
+                <p><strong>Has ServiceNow Globals:</strong> {environmentInfo.hasServiceNowGlobals ? 'Yes' : 'No'}</p>
+                <p><strong>Hostname:</strong> {environmentInfo.hostname}</p>
+                <p><strong>Has Credentials:</strong> {environmentInfo.hasCredentials ? 'Yes' : 'No'}</p>
+              </div>
+            </details>
           )}
         </CardContent>
       </Card>
