@@ -116,15 +116,15 @@ export function HierarchyMiniMap({
         size="sm"
         variant="ghost"
         onClick={() => setIsVisible(!isVisible)}
-        className={`absolute bottom-4 right-4 z-50 w-8 h-8 p-0 bg-white/80 backdrop-blur-sm border border-gray-200 rounded-lg shadow-lg hover:bg-white/95 transition-all duration-200 ${className}`}
+        className={`absolute bottom-2 left-2 z-[45] w-7 h-7 p-0 bg-white/95 backdrop-blur-sm border border-gray-200 rounded-lg shadow-lg hover:bg-gray-100 transition-all duration-200 ${className}`}
         title={isVisible ? "Hide Overview Map" : "Show Overview Map"}
       >
-        {isVisible ? <X className="h-4 w-4" /> : <MapIcon className="h-4 w-4" />}
+        {isVisible ? <X className="h-3.5 w-3.5 text-gray-600" /> : <MapIcon className="h-3.5 w-3.5 text-gray-600" />}
       </Button>
 
       {/* Mini Map Container */}
       {isVisible && (
-        <div className={`absolute bottom-16 right-4 z-40 bg-white/85 backdrop-blur-sm border border-gray-200 rounded-lg shadow-lg p-2 transition-all duration-300 ${className}`}>
+        <div className={`absolute bottom-10 left-2 z-40 bg-white/85 backdrop-blur-sm border border-gray-200 rounded-lg shadow-lg p-2 transition-all duration-300 ${className}`}>
           <div className="text-xs text-gray-600 mb-1 font-medium">
             Hierarchy Overview ({miniMapLayout.nodeCount} tables)
           </div>

@@ -7,7 +7,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { CheckCircle, ZoomIn, ZoomOut, RotateCcw, Loader2, AlertTriangle, Database, Users, Calendar } from 'lucide-react';
 import { GraphLayoutType } from './GraphControls';
-import { GraphSidebar } from './GraphSidebar';
+import { GraphSidebarOverlay } from './GraphSidebarOverlay';
+import { TypesLegendCard } from './TypesLegendCard';
 import { GraphSearchOverlay } from './GraphSearchOverlay';
 import { VirtualizedRenderer, useVirtualizedPerformance } from './VirtualizedRenderer';
 import { HierarchyMiniMap } from './HierarchyMiniMap';
@@ -659,9 +660,9 @@ export function InheritanceTreeView() {
 
   return (
     <div className="w-full space-y-4">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Tree Visualization */}
-        <div className="lg:col-span-2">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+        {/* Tree Visualization - now takes 3/4 instead of 2/3 */}
+        <div className="lg:col-span-3">
           <Card className="w-full">
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between">
@@ -684,8 +685,8 @@ export function InheritanceTreeView() {
                 className="w-full border rounded-lg bg-slate-50/50 relative" 
                 style={{ height: '600px' }}
               >
-                {/* Sidebar Controls */}
-                <GraphSidebar
+                {/* Sidebar Overlay Controls - positioned over D3.js canvas */}
+                <GraphSidebarOverlay
                   layoutType={layoutType}
                   onLayoutChange={setLayoutType}
                   onZoomIn={handleZoomIn}
@@ -698,8 +699,6 @@ export function InheritanceTreeView() {
                       [type]: !prev[type]
                     }));
                   }}
-                  customTableEmphasis={customTableEmphasis}
-                  onCustomEmphasisChange={setCustomTableEmphasis}
                   showCustomOnly={showCustomOnly}
                   onCustomOnlyToggle={() => setShowCustomOnly(!showCustomOnly)}
                   customTableCount={d3TreeLayout?.nodes.filter(n => n.data.type === 'custom' && !n.data._isFiltered).length || 0}
@@ -859,6 +858,22 @@ export function InheritanceTreeView() {
             </CardContent>
           </Card>
         </div>
+      </div>
+
+      {/* Types Legend Card */}
+      <div className="flex justify-center">
+        <TypesLegendCard
+          visibleTableTypes={visibleTableTypes}
+          onTableTypeToggle={(type) => {
+            setVisibleTableTypes(prev => ({
+              ...prev,
+              [type]: !prev[type]
+            }));
+          }}
+          customTableCount={d3TreeLayout?.nodes.filter(n => n.data.type === 'custom' && !n.data._isFiltered).length || 0}
+          showCustomOnly={showCustomOnly}
+          onCustomOnlyToggle={() => setShowCustomOnly(!showCustomOnly)}
+        />
       </div>
     </div>
   );

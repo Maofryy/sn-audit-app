@@ -3,7 +3,8 @@ import * as d3 from 'd3';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { GraphControls } from './GraphControls';
+import { GraphSidebarOverlay } from './GraphSidebarOverlay';
+import { TypesLegendCard } from './TypesLegendCard';
 import { NodeDetailsPanel } from './NodeDetailsPanel';
 import { useGraph, useGraphActions } from '../contexts/GraphContext';
 import { useGraphData, useTableDetails } from '../hooks/useServiceNowData';
@@ -446,22 +447,9 @@ export function ReferenceNetworkView() {
 
   return (
     <div className="w-full space-y-4">
-      {/* Controls */}
-      <GraphControls
-        viewType="references"
-        onZoomIn={handleZoomIn}
-        onZoomOut={handleZoomOut}
-        onResetView={handleResetView}
-        searchTerm={state.searchTerm}
-        onSearchChange={handleSearchChange}
-        nodeCount={state.nodeCount}
-        edgeCount={state.edgeCount}
-        selectedCount={state.selectedTables.length}
-      />
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Network Visualization */}
-        <div className="lg:col-span-2">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+        {/* Network Visualization - now takes 3/4 instead of 2/3 */}
+        <div className="lg:col-span-3">
           <Card className="w-full">
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between">
@@ -479,9 +467,16 @@ export function ReferenceNetworkView() {
             <CardContent>
               <div 
                 ref={containerRef}
-                className="w-full border rounded-lg bg-slate-50/50"
+                className="w-full border rounded-lg bg-slate-50/50 relative"
                 style={{ height: '600px' }}
               >
+                {/* Sidebar Overlay Controls - positioned over D3.js canvas */}
+                <GraphSidebarOverlay
+                  onZoomIn={handleZoomIn}
+                  onZoomOut={handleZoomOut}
+                  onResetView={handleResetView}
+                />
+                
                 {isComponentLoading ? (
                   <div className="flex items-center justify-center h-full">
                     <div className="text-center space-y-2">
@@ -515,6 +510,13 @@ export function ReferenceNetworkView() {
             }}
           />
         </div>
+      </div>
+
+      {/* Types Legend Card */}
+      <div className="flex justify-center">
+        <TypesLegendCard
+          customTableCount={graphData?.nodes?.filter(n => n.table?.is_custom).length || 0}
+        />
       </div>
     </div>
   );

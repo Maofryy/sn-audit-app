@@ -3,7 +3,8 @@ import * as d3 from 'd3';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { GraphControls } from './GraphControls';
+import { GraphSidebarOverlay } from './GraphSidebarOverlay';
+import { TypesLegendCard } from './TypesLegendCard';
 import { NodeDetailsPanel } from './NodeDetailsPanel';
 import { useGraph, useGraphActions } from '../contexts/GraphContext';
 import { useCIRelationships, useRelationshipTypes, useTableDetails } from '../hooks/useServiceNowData';
@@ -429,21 +430,8 @@ export function CIRelationshipView() {
       </Card>
 
       <div className="grid grid-cols-1 xl:grid-cols-4 gap-4">
-        {/* Controls */}
+        {/* Filters & Details */}
         <div className="xl:col-span-1 space-y-4">
-          <GraphControls
-            viewType="ci-relationships"
-            nodeCount={graphData.nodes.length}
-            edgeCount={graphData.links.length}
-            selectedCount={selectedNodeId ? 1 : 0}
-            onZoomIn={handleZoomIn}
-            onZoomOut={handleZoomOut}
-            onResetView={handleResetView}
-            searchTerm={state.searchTerm}
-            onSearchChange={(term) => {
-              // Implement search functionality
-            }}
-          />
 
           {/* Relationship Type Filters */}
           {relationshipTypes && relationshipTypes.length > 0 && (
@@ -493,6 +481,13 @@ export function CIRelationshipView() {
           <Card>
             <CardContent className="p-0">
               <div ref={containerRef} className="relative">
+                {/* Sidebar Overlay Controls - positioned over D3.js canvas */}
+                <GraphSidebarOverlay
+                  onZoomIn={handleZoomIn}
+                  onZoomOut={handleZoomOut}
+                  onResetView={handleResetView}
+                />
+                
                 <svg
                   ref={svgRef}
                   width={dimensions.width}
@@ -515,6 +510,13 @@ export function CIRelationshipView() {
             </CardContent>
           </Card>
         </div>
+      </div>
+
+      {/* Types Legend Card */}
+      <div className="flex justify-center">
+        <TypesLegendCard
+          customTableCount={graphData?.nodes?.filter(n => n.isCustom).length || 0}
+        />
       </div>
     </div>
   );

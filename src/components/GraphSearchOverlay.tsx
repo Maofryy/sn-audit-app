@@ -24,16 +24,16 @@ export function GraphSearchOverlay({
   };
 
   return (
-    <div className="absolute top-4 right-4 z-50">
+    <div className="absolute top-2 left-2 z-[45]">
       {!isExpanded ? (
         /* Collapsed Search Button */
         <Button
           size="sm"
-          variant="outline"
+          variant="ghost"
           onClick={() => setIsExpanded(true)}
-          className="bg-white/95 backdrop-blur-sm border-gray-200 shadow-lg hover:shadow-xl transition-all duration-200"
+          className="w-7 h-7 p-0 bg-white/95 backdrop-blur-sm border border-gray-200 rounded-lg shadow-lg hover:bg-gray-100 transition-all duration-200"
         >
-          <Search className="h-4 w-4" />
+          <Search className="h-3.5 w-3.5 text-gray-600" />
         </Button>
       ) : (
         /* Expanded Search Bar */
