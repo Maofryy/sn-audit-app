@@ -16,9 +16,29 @@ import {
 import { makeAuthenticatedRequest, testConnection as authTestConnection } from "./authService";
 
 export class ServiceNowService {
+    private requestCache = new Map<string, Promise<any>>();
+    private cacheTimeout = 5000; // 5 seconds deduplication window
+
     // Test connection using the authentication service
     async testConnection(): Promise<{ success: boolean; error?: string; responseTime?: number; mode?: string }> {
         return authTestConnection();
+    }
+
+    // Request deduplication wrapper
+    private async deduplicatedRequest<T>(key: string, requestFn: () => Promise<T>): Promise<T> {
+        if (this.requestCache.has(key)) {
+            return this.requestCache.get(key);
+        }
+
+        const promise = requestFn().finally(() => {
+            // Clear from cache after timeout
+            setTimeout(() => {
+                this.requestCache.delete(key);
+            }, this.cacheTimeout);
+        });
+
+        this.requestCache.set(key, promise);
+        return promise;
     }
 
     async getCurrentUser(): Promise<any> {
@@ -47,19 +67,39 @@ export class ServiceNowService {
 
     // CMDB Table Discovery Methods - Enhanced for complete hierarchy
     async getCMDBTables(): Promise<TableMetadata[]> {
-        const fields = "sys_id,name,label,super_class,sys_created_by,sys_created_on,sys_updated_on,sys_updated_by";
+        const cacheKey = 'cmdb-tables-15gen';
+        
+        return this.deduplicatedRequest(cacheKey, async () => {
+            const fields = "sys_id,name,label,super_class,sys_created_by,sys_created_on,sys_updated_on,sys_updated_by";
 
-        // Get all CMDB-related tables with no limit
-        const response = await this.makeRequest<ServiceNowRecord>(
-            `/api/now/table/sys_db_object?sysparm_query=super_class.name=cmdb_ci^ORname=cmdb_ci^ORsuper_class.super_class.name=cmdb_ci&sysparm_limit=10000&sysparm_fields=${fields}&sysparm_display_value=all`
-        );
+            // Efficient query with 15 generations of CMDB inheritance
+            const generationQueries = [
+                'name=cmdb_ci',
+                'name=cmdb',
+                'super_class.name=cmdb_ci',
+                'super_class.name=cmdb'
+            ];
 
-        const allTables = response.result;
+            // Build nested queries up to 15 generations
+            for (let i = 2; i <= 15; i++) {
+                const depth = 'super_class.'.repeat(i);
+                generationQueries.push(`${depth}name=cmdb_ci`);
+                generationQueries.push(`${depth}name=cmdb`);
+            }
 
-        const tables = allTables.map((record) => this.mapToTableMetadata(record));
+            const query = generationQueries.join('^OR');
+            
+            const response = await this.makeRequest<ServiceNowRecord>(
+                `/api/now/table/sys_db_object?sysparm_query=${query}&sysparm_limit=10000&sysparm_fields=${fields}&sysparm_display_value=all`
+            );
 
+            const tables = response.result.map((record) => this.mapToTableMetadata(record));
 
-        return tables;
+            // Log maximum generation depth found
+            this.logMaxGenerationDepth(tables);
+
+            return tables;
+        });
     }
 
     async getAllTables(): Promise<TableMetadata[]> {
@@ -76,9 +116,9 @@ export class ServiceNowService {
         return response.result.map((record) => this.mapToFieldMetadata(record));
     }
 
-    async getCustomTables(): Promise<TableMetadata[]> {
-        // Get all CMDB tables
-        const allTables = await this.getCMDBTables();
+    async getCustomTables(cmdbTables?: TableMetadata[]): Promise<TableMetadata[]> {
+        // Reuse provided CMDB tables to avoid duplicate API calls
+        const allTables = cmdbTables || await this.getCMDBTables();
 
         // Filter for custom tables (created after implementation or with custom prefixes)
         return allTables.filter((table) => this.isCustomTable(table));
@@ -139,8 +179,8 @@ export class ServiceNowService {
     }
 
     // Table Hierarchy Building
-    async buildTableHierarchy(): Promise<TableHierarchy> {
-        const tables = await this.getCMDBTables();
+    async buildTableHierarchy(cmdbTables?: TableMetadata[]): Promise<TableHierarchy> {
+        const tables = cmdbTables || await this.getCMDBTables();
 
         const nodeMap = new Map<string, TableNode>();
         const sysIdToNodeMap = new Map<string, TableNode>();
@@ -272,8 +312,9 @@ export class ServiceNowService {
     }
 
     // Graph Data Generation
-    async generateGraphData(includeReferences: boolean = true): Promise<GraphData> {
-        const [tables, relationships, referenceFields] = await Promise.all([this.getCMDBTables(), this.getCIRelationships(), includeReferences ? this.getReferenceFields() : Promise.resolve([])]);
+    async generateGraphData(includeReferences: boolean = true, cmdbTables?: TableMetadata[]): Promise<GraphData> {
+        const tables = cmdbTables || await this.getCMDBTables();
+        const [relationships, referenceFields] = await Promise.all([this.getCIRelationships(), includeReferences ? this.getReferenceFields() : Promise.resolve([])]);
 
         const nodes: GraphNode[] = tables.map((table) => ({
             id: table.name,
@@ -336,6 +377,98 @@ export class ServiceNowService {
                 generated_at: new Date(),
             },
         };
+    }
+
+
+    // Alternative: Batch query approach for extreme performance (if needed)
+    // Use this for 1000+ tables or when single query becomes too slow
+    private async getCMDBTablesBatch(): Promise<TableMetadata[]> {
+        const fields = "sys_id,name,label,super_class,sys_created_by,sys_created_on,sys_updated_on,sys_updated_by";
+        const batchSize = 2000;
+        let allCmdbTables: TableMetadata[] = [];
+        let currentGeneration = ['cmdb_ci', 'cmdb'];
+        
+        while (currentGeneration.length > 0) {
+            // Build query for current generation
+            const parentQuery = currentGeneration
+                .map(parent => `super_class.name=${parent}`)
+                .join('^OR');
+            
+            const response = await this.makeRequest<ServiceNowRecord>(
+                `/api/now/table/sys_db_object?sysparm_query=${parentQuery}&sysparm_limit=${batchSize}&sysparm_fields=${fields}&sysparm_display_value=all`
+            );
+            
+            const generationTables = response.result.map(r => this.mapToTableMetadata(r));
+            
+            if (generationTables.length === 0) break;
+            
+            allCmdbTables.push(...generationTables);
+            currentGeneration = generationTables.map(t => t.name);
+        }
+        
+        return allCmdbTables;
+    }
+
+    // Generation depth analysis and logging
+    private logMaxGenerationDepth(tables: TableMetadata[]): void {
+        const tableMap = new Map<string, TableMetadata>();
+        const sysIdMap = new Map<string, TableMetadata>();
+
+        // Build lookup maps
+        tables.forEach(table => {
+            tableMap.set(table.name, table);
+            sysIdMap.set(table.sys_id, table);
+        });
+
+        let maxDepth = 0;
+        let deepestTable = '';
+        const depthDistribution = new Map<number, number>();
+
+        // Calculate depth for each table
+        const calculateDepth = (table: TableMetadata, visited = new Set<string>()): number => {
+            if (visited.has(table.sys_id)) return 0; // Cycle detected
+            visited.add(table.sys_id);
+
+            // Root tables
+            if (table.name === 'cmdb_ci' || table.name === 'cmdb') {
+                return 0;
+            }
+
+            if (!table.super_class) return 0;
+
+            // Find parent
+            let parent = sysIdMap.get(table.super_class);
+            if (!parent) {
+                parent = tableMap.get(table.super_class);
+            }
+
+            if (!parent) return 0;
+
+            const parentDepth = calculateDepth(parent, new Set(visited));
+            return parentDepth + 1;
+        };
+
+        tables.forEach(table => {
+            const depth = calculateDepth(table);
+            
+            if (depth > maxDepth) {
+                maxDepth = depth;
+                deepestTable = table.name;
+            }
+
+            // Track depth distribution
+            depthDistribution.set(depth, (depthDistribution.get(depth) || 0) + 1);
+        });
+
+        // Log results
+        console.log('🏗️ CMDB Hierarchy Analysis:');
+        console.log(`📊 Total CMDB tables: ${tables.length}`);
+        console.log(`📏 Maximum generation depth: ${maxDepth} (${deepestTable})`);
+        console.log(`📈 Generation distribution:`, Object.fromEntries(depthDistribution));
+        
+        if (maxDepth >= 14) {
+            console.warn('⚠️ Maximum depth approaching 15-generation limit. Consider increasing if needed.');
+        }
     }
 
     // Utility Methods

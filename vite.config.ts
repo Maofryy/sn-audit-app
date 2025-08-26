@@ -9,6 +9,13 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
     port: 8080,
+    watch: {
+      usePolling: true,
+      interval: 1000,
+    },
+    hmr: {
+      overlay: true,
+    },
   },
   plugins: [
     react(),

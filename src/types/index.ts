@@ -19,6 +19,7 @@ export interface TableMetadata {
   name: string;
   label: string;
   super_class: string | null;
+  sys_scope: string;
   sys_created_on: string;
   sys_created_by: string;
   sys_updated_on: string;

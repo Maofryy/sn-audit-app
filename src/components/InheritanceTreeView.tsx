@@ -7,6 +7,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { CheckCircle, ZoomIn, ZoomOut, RotateCcw, Loader2, AlertTriangle, Database, Users, Calendar } from 'lucide-react';
 import { serviceNowService } from '@/services/serviceNowService';
+import { useCMDBData } from '@/contexts/CMDBDataContext';
 import { TableMetadata, FieldMetadata } from '@/types';
 
 interface TreeNodeData {
@@ -29,10 +30,14 @@ interface NodeDetails {
 }
 
 export function InheritanceTreeView() {
+  // Data fetching
+  const { tables: cmdbTablesData, isLoading: cmdbTablesLoading } = useCMDBData();
+  
   // State management
   const [selectedNode, setSelectedNode] = useState<TreeNodeData | null>(null);
   const [hoveredNode, setHoveredNode] = useState<TreeNodeData | null>(null);
   const [nodeDetails, setNodeDetails] = useState<NodeDetails | null>(null);
+  const [loadingDetails, setLoadingDetails] = useState(false);
   const [treeData, setTreeData] = useState<TreeNodeData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -68,15 +73,27 @@ export function InheritanceTreeView() {
     };
 
     loadTableHierarchy();
-  }, []);
+  }, []); // convertHierarchyToTree is stable due to useCallback with no deps
 
   // Load node details on hover
   useEffect(() => {
     const loadNodeDetails = async () => {
       if (!hoveredNode?.table) {
         setNodeDetails(null);
+        setLoadingDetails(false);
         return;
       }
+
+      // Immediately set basic details from hoveredNode data
+      setNodeDetails({
+        table: hoveredNode.table,
+        customFields: [],
+        referenceFields: [],
+        childTables: [],
+        recordCount: hoveredNode.recordCount
+      });
+
+      setLoadingDetails(true);
 
       try {
         const [customFields, referenceFields, childTables] = await Promise.all([
@@ -84,9 +101,7 @@ export function InheritanceTreeView() {
           serviceNowService.getReferenceFields().then(fields => 
             fields.filter(f => f.table === hoveredNode.table!.name)
           ),
-          serviceNowService.getCMDBTables().then(tables => 
-            tables.filter(t => t.super_class === hoveredNode.table!.name)
-          )
+          Promise.resolve(cmdbTablesData?.filter(t => t.super_class === hoveredNode.table!.sys_id) || [])
         ]);
 
         setNodeDetails({
@@ -94,10 +109,12 @@ export function InheritanceTreeView() {
           customFields,
           referenceFields,
           childTables,
-          recordCount: undefined // Disabled stats API
+          recordCount: hoveredNode.recordCount
         });
       } catch (err) {
         console.error('Failed to load node details:', err);
+      } finally {
+        setLoadingDetails(false);
       }
     };
 
@@ -183,7 +200,7 @@ export function InheritanceTreeView() {
     const svg = d3.select(svgRef.current);
     
     const zoom = d3.zoom<SVGSVGElement, unknown>()
-      .scaleExtent([0.1, 10])
+      .scaleExtent([0.05, 25])
       .on('zoom', (event) => {
         setTransform({
           x: event.transform.x,
@@ -240,15 +257,16 @@ export function InheritanceTreeView() {
     const baseWidth = Math.max(800, dimensions.width - margin.left - margin.right);
     const baseHeight = Math.max(400, dimensions.height - margin.top - margin.bottom);
     
-    // Increase spacing for large trees
+    // Increase spacing for large trees - much more vertical space between levels
     const width = nodeCount > 100 ? baseWidth * 1.5 : baseWidth;
-    const height = nodeCount > 100 ? Math.max(baseHeight * 2, nodeCount * 8) : baseHeight;
+    const height = nodeCount > 100 ? Math.max(baseHeight * 3, nodeCount * 15) : Math.max(baseHeight * 2, nodeCount * 12);
     
     const treeLayout = d3.tree()
       .size([height, width])
       .separation((a, b) => {
-        const baseSeparation = (a.parent === b.parent ? 1.2 : 2.5);
-        return nodeCount > 100 ? baseSeparation * 1.5 : baseSeparation;
+        // Much larger spacing between grandchildren and across different branches
+        const baseSeparation = (a.parent === b.parent ? 3.0 : 5.5);
+        return nodeCount > 100 ? baseSeparation * 1.8 : baseSeparation;
       });
     
     // Apply layout to compute positions
@@ -313,7 +331,6 @@ export function InheritanceTreeView() {
           style={{ cursor: 'pointer' }}
           onClick={() => setSelectedNode(isSelected ? null : node)}
           onMouseEnter={() => setHoveredNode(node)}
-          onMouseLeave={() => setHoveredNode(null)}
         />
         <text
           x={d3Node.y + margin.left}
@@ -325,17 +342,6 @@ export function InheritanceTreeView() {
           style={{ pointerEvents: 'none', userSelect: 'none' }}
         >
           {node.label}
-        </text>
-        {/* Node type indicator */}
-        <text
-          x={d3Node.y + margin.left}
-          y={d3Node.x + margin.top + 25}
-          textAnchor="middle"
-          fontSize="10"
-          fill="#6b7280"
-          style={{ pointerEvents: 'none', userSelect: 'none' }}
-        >
-          {node.type}
         </text>
       </g>
     );
@@ -406,41 +412,6 @@ export function InheritanceTreeView() {
 
   return (
     <div className="w-full space-y-4">
-      {/* Control Panel */}
-      <div className="flex items-center justify-between p-4 bg-slate-50 rounded-lg border">
-        <div className="flex items-center gap-4">
-          <h3 className="font-medium">Tree Controls</h3>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleZoomIn}
-              disabled={transform.k >= 10}
-            >
-              <ZoomIn className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleZoomOut}
-              disabled={transform.k <= 0.25}
-            >
-              <ZoomOut className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleResetView}
-            >
-              <RotateCcw className="h-4 w-4" />
-              Reset
-            </Button>
-          </div>
-        </div>
-        <div className="text-sm text-muted-foreground">
-          Zoom: {Math.round(transform.k * 100)}% | Tables: {d3TreeLayout.nodes.length} | {isDragging ? 'Dragging' : 'Ready'}
-        </div>
-      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Tree Visualization */}
@@ -525,123 +496,141 @@ export function InheritanceTreeView() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4 max-h-[500px] overflow-y-auto">
-              {(hoveredNode || selectedNode) && nodeDetails ? (
+              {(hoveredNode || selectedNode) ? (
                 <div className="space-y-4">
-                  <div className="space-y-2">
-                    <h4 className="font-medium flex items-center gap-2">
-                      <Database className="h-4 w-4" />
-                      Table Information
-                    </h4>
-                    <div className="bg-slate-50 p-3 rounded-lg space-y-2">
-                      <div>
-                        <span className="text-xs text-muted-foreground uppercase tracking-wide">System Name</span>
-                        <p className="font-mono text-sm">{nodeDetails.table.name}</p>
-                      </div>
-                      <div>
-                        <span className="text-xs text-muted-foreground uppercase tracking-wide">Display Label</span>
-                        <p className="text-sm">{nodeDetails.table.label}</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-muted-foreground uppercase tracking-wide">Type</span>
-                        <Badge 
-                          variant="outline" 
-                          className={
-                            nodeDetails.table.table_type === 'base' ? 'bg-blue-50 text-blue-700 border-blue-200' :
-                            nodeDetails.table.table_type === 'extended' ? 'bg-green-50 text-green-700 border-green-200' :
-                            'bg-orange-50 text-orange-700 border-orange-200'
-                          }
-                        >
-                          {nodeDetails.table.table_type?.toUpperCase() || 'UNKNOWN'}
-                        </Badge>
-                      </div>
-                    </div>
-                  </div>
-
-                  {nodeDetails.table.super_class && (
+                  {/* Basic Table Information - Always show immediately */}
+                  {(hoveredNode || selectedNode) && (
                     <div className="space-y-2">
-                      <h4 className="font-medium text-sm">Inheritance</h4>
-                      <div className="bg-blue-50 p-2 rounded text-sm">
-                        <span className="text-muted-foreground">Extends:</span>
-                        <span className="font-mono ml-1">{nodeDetails.table.super_class}</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {nodeDetails.recordCount !== undefined && (
-                    <div className="space-y-2">
-                      <h4 className="font-medium text-sm flex items-center gap-1">
-                        <Users className="h-4 w-4" />
-                        Record Count
+                      <h4 className="font-medium flex items-center gap-2">
+                        <Database className="h-4 w-4" />
+                        Table Information
                       </h4>
-                      <div className="bg-green-50 p-2 rounded">
-                        <span className="text-lg font-semibold text-green-700">
-                          {nodeDetails.recordCount.toLocaleString()}
-                        </span>
-                        <span className="text-sm text-muted-foreground ml-1">records</span>
+                      <div className="bg-slate-50 p-3 rounded-lg space-y-2">
+                        <div>
+                          <span className="text-xs text-muted-foreground uppercase tracking-wide">System Name</span>
+                          <p className="font-mono text-sm">{(hoveredNode || selectedNode)?.table?.name || (hoveredNode || selectedNode)?.name}</p>
+                        </div>
+                        <div>
+                          <span className="text-xs text-muted-foreground uppercase tracking-wide">Display Label</span>
+                          <p className="text-sm">{(hoveredNode || selectedNode)?.table?.label || (hoveredNode || selectedNode)?.label}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground uppercase tracking-wide">Type</span>
+                          <Badge 
+                            variant="outline" 
+                            className={
+                              (hoveredNode || selectedNode)?.type === 'base' ? 'bg-blue-50 text-blue-700 border-blue-200' :
+                              (hoveredNode || selectedNode)?.type === 'extended' ? 'bg-green-50 text-green-700 border-green-200' :
+                              'bg-orange-50 text-orange-700 border-orange-200'
+                            }
+                          >
+                            {(hoveredNode || selectedNode)?.type?.toUpperCase() || 'UNKNOWN'}
+                          </Badge>
+                        </div>
                       </div>
                     </div>
                   )}
 
-                  {nodeDetails.childTables.length > 0 && (
-                    <div className="space-y-2">
-                      <h4 className="font-medium text-sm">Child Tables ({nodeDetails.childTables.length})</h4>
-                      <div className="space-y-1 max-h-24 overflow-y-auto">
-                        {nodeDetails.childTables.map(child => (
-                          <div key={child.name} className="text-xs bg-slate-50 p-1 rounded font-mono">
-                            {child.name}
+                  {/* Additional Details - Show when nodeDetails is available */}
+                  {nodeDetails && (
+                    <div className="space-y-4">
+                      {nodeDetails.table.super_class && (
+                        <div className="space-y-2">
+                          <h4 className="font-medium text-sm">Inheritance</h4>
+                          <div className="bg-blue-50 p-2 rounded text-sm">
+                            <span className="text-muted-foreground">Extends:</span>
+                            <span className="font-mono ml-1">{nodeDetails.table.super_class}</span>
                           </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                        </div>
+                      )}
 
-                  {nodeDetails.customFields.length > 0 && (
-                    <div className="space-y-2">
-                      <h4 className="font-medium text-sm">Custom Fields ({nodeDetails.customFields.length})</h4>
-                      <div className="space-y-1 max-h-24 overflow-y-auto">
-                        {nodeDetails.customFields.slice(0, 5).map(field => (
-                          <div key={field.sys_id} className="text-xs bg-orange-50 p-1 rounded">
-                            <span className="font-mono">{field.element}</span>
-                            <span className="text-muted-foreground ml-1">({field.type})</span>
+                      {nodeDetails.recordCount !== undefined && (
+                        <div className="space-y-2">
+                          <h4 className="font-medium text-sm flex items-center gap-1">
+                            <Users className="h-4 w-4" />
+                            Record Count
+                          </h4>
+                          <div className="bg-green-50 p-2 rounded">
+                            <span className="text-lg font-semibold text-green-700">
+                              {nodeDetails.recordCount.toLocaleString()}
+                            </span>
+                            <span className="text-sm text-muted-foreground ml-1">records</span>
                           </div>
-                        ))}
-                        {nodeDetails.customFields.length > 5 && (
-                          <div className="text-xs text-muted-foreground">+ {nodeDetails.customFields.length - 5} more...</div>
-                        )}
-                      </div>
-                    </div>
-                  )}
+                        </div>
+                      )}
 
-                  {nodeDetails.referenceFields.length > 0 && (
-                    <div className="space-y-2">
-                      <h4 className="font-medium text-sm">Reference Fields ({nodeDetails.referenceFields.length})</h4>
-                      <div className="space-y-1 max-h-24 overflow-y-auto">
-                        {nodeDetails.referenceFields.slice(0, 3).map(field => (
-                          <div key={field.sys_id} className="text-xs bg-blue-50 p-1 rounded">
-                            <span className="font-mono">{field.element}</span>
-                            <span className="text-muted-foreground ml-1">→ {field.reference_table}</span>
+                      {/* Loading indicator for additional details */}
+                      {loadingDetails && (
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Loading additional details...
+                        </div>
+                      )}
+
+                      {!loadingDetails && nodeDetails.childTables.length > 0 && (
+                        <div className="space-y-2">
+                          <h4 className="font-medium text-sm">Child Tables ({nodeDetails.childTables.length})</h4>
+                          <div className="space-y-1 max-h-24 overflow-y-auto">
+                            {nodeDetails.childTables.map(child => (
+                              <div key={child.name} className="text-xs bg-slate-50 p-1 rounded font-mono">
+                                {child.name}
+                              </div>
+                            ))}
                           </div>
-                        ))}
-                        {nodeDetails.referenceFields.length > 3 && (
-                          <div className="text-xs text-muted-foreground">+ {nodeDetails.referenceFields.length - 3} more...</div>
-                        )}
-                      </div>
-                    </div>
-                  )}
+                        </div>
+                      )}
 
-                  <div className="space-y-2">
-                    <h4 className="font-medium text-sm flex items-center gap-1">
-                      <Calendar className="h-4 w-4" />
-                      Timestamps
-                    </h4>
-                    <div className="text-xs text-muted-foreground space-y-1">
-                      <div>Created: {new Date(nodeDetails.table.sys_created_on).toLocaleDateString()}</div>
-                      <div>By: {nodeDetails.table.sys_created_by}</div>
-                      {nodeDetails.table.sys_updated_on && (
-                        <div>Updated: {new Date(nodeDetails.table.sys_updated_on).toLocaleDateString()}</div>
+                      {!loadingDetails && nodeDetails.customFields.length > 0 && (
+                        <div className="space-y-2">
+                          <h4 className="font-medium text-sm">Custom Fields ({nodeDetails.customFields.length})</h4>
+                          <div className="space-y-1 max-h-24 overflow-y-auto">
+                            {nodeDetails.customFields.slice(0, 5).map(field => (
+                              <div key={field.sys_id} className="text-xs bg-orange-50 p-1 rounded">
+                                <span className="font-mono">{field.element}</span>
+                                <span className="text-muted-foreground ml-1">({field.type})</span>
+                              </div>
+                            ))}
+                            {nodeDetails.customFields.length > 5 && (
+                              <div className="text-xs text-muted-foreground">+ {nodeDetails.customFields.length - 5} more...</div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {!loadingDetails && nodeDetails.referenceFields.length > 0 && (
+                        <div className="space-y-2">
+                          <h4 className="font-medium text-sm">Reference Fields ({nodeDetails.referenceFields.length})</h4>
+                          <div className="space-y-1 max-h-24 overflow-y-auto">
+                            {nodeDetails.referenceFields.slice(0, 3).map(field => (
+                              <div key={field.sys_id} className="text-xs bg-blue-50 p-1 rounded">
+                                <span className="font-mono">{field.element}</span>
+                                <span className="text-muted-foreground ml-1">→ {field.reference_table}</span>
+                              </div>
+                            ))}
+                            {nodeDetails.referenceFields.length > 3 && (
+                              <div className="text-xs text-muted-foreground">+ {nodeDetails.referenceFields.length - 3} more...</div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {nodeDetails.table.sys_created_on && (
+                        <div className="space-y-2">
+                          <h4 className="font-medium text-sm flex items-center gap-1">
+                            <Calendar className="h-4 w-4" />
+                            Timestamps
+                          </h4>
+                          <div className="text-xs text-muted-foreground space-y-1">
+                            <div>Created: {new Date(nodeDetails.table.sys_created_on).toLocaleDateString()}</div>
+                            <div>By: {nodeDetails.table.sys_created_by}</div>
+                            {nodeDetails.table.sys_updated_on && (
+                              <div>Updated: {new Date(nodeDetails.table.sys_updated_on).toLocaleDateString()}</div>
+                            )}
+                          </div>
+                        </div>
                       )}
                     </div>
-                  </div>
+                  )}
 
                   {selectedNode && (
                     <Button 

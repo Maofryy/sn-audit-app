@@ -122,6 +122,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(connectionReducer, initialState);
 
   const testConnection = useCallback(async () => {
+    // Prevent duplicate calls if already testing
+    if (state.status.testing) {
+      return;
+    }
+
     dispatch({ type: 'SET_TESTING', payload: true });
 
     try {
@@ -131,7 +136,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
       dispatch({ type: 'SET_ERROR', payload: errorMessage });
     }
-  }, []);
+  }, [state.status.testing]);
 
   const refreshAuthStatus = useCallback(() => {
     dispatch({ type: 'REFRESH_AUTH_STATUS' });
@@ -153,7 +158,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     if (!state.isInitialized) {
       initializeConnection();
     }
-  }, [state.isInitialized, testConnection, refreshAuthStatus]);
+    // Removed testConnection from dependencies to prevent re-triggering
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.isInitialized]);
 
   return (
     <ConnectionContext.Provider value={{ state, dispatch, testConnection, refreshAuthStatus }}>

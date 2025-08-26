@@ -1,5 +1,6 @@
 import { useQuery, useQueries, UseQueryOptions } from '@tanstack/react-query';
 import { serviceNowService } from '../services/serviceNowService';
+import { useCMDBData } from '../contexts/CMDBDataContext';
 import { 
   TableMetadata, 
   FieldMetadata, 
@@ -45,6 +46,8 @@ const baseQueryOptions = {
   cacheTime: 1000 * 60 * 15, // 15 minutes
   refetchOnWindowFocus: false,
   retry: 2,
+  // Prevent duplicate requests during StrictMode double-renders
+  refetchOnMount: false,
 } as const;
 
 // Table-related queries
@@ -67,9 +70,12 @@ export function useAllTables(options?: Partial<UseQueryOptions<TableMetadata[], 
 }
 
 export function useCustomTables(options?: Partial<UseQueryOptions<TableMetadata[], Error>>) {
+  const { tables: cmdbTables, isSuccess } = useCMDBData();
+  
   return useQuery({
     queryKey: queryKeys.customTables,
-    queryFn: () => serviceNowService.getCustomTables(),
+    queryFn: () => serviceNowService.getCustomTables(cmdbTables),
+    enabled: isSuccess && !!cmdbTables, // Only run when CMDB tables are available
     ...baseQueryOptions,
     ...options,
   });
@@ -90,9 +96,12 @@ export function useTableSchema(
 
 // Hierarchy queries
 export function useTableHierarchy(options?: Partial<UseQueryOptions<TableHierarchy, Error>>) {
+  const { tables: cmdbTables, isSuccess } = useCMDBData();
+  
   return useQuery({
     queryKey: queryKeys.tableHierarchy,
-    queryFn: () => serviceNowService.buildTableHierarchy(),
+    queryFn: () => serviceNowService.buildTableHierarchy(cmdbTables),
+    enabled: isSuccess && !!cmdbTables, // Only run when CMDB tables are available
     ...baseQueryOptions,
     staleTime: 1000 * 60 * 30, // 30 minutes for hierarchy (changes less frequently)
     ...options,
@@ -139,9 +148,12 @@ export function useGraphData(
   includeReferences: boolean = true,
   options?: Partial<UseQueryOptions<GraphData, Error>>
 ) {
+  const { tables: cmdbTables, isSuccess } = useCMDBData();
+  
   return useQuery({
     queryKey: queryKeys.graphData(includeReferences),
-    queryFn: () => serviceNowService.generateGraphData(includeReferences),
+    queryFn: () => serviceNowService.generateGraphData(includeReferences, cmdbTables),
+    enabled: isSuccess && !!cmdbTables, // Only run when CMDB tables are available
     ...baseQueryOptions,
     staleTime: 1000 * 60 * 10, // 10 minutes
     ...options,

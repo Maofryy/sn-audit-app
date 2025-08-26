@@ -1,5 +1,6 @@
 import { ConnectionProvider, useConnection } from './contexts/ConnectionContext';
 import { GraphProvider } from './contexts/GraphContext';
+import { CMDBDataProvider } from './contexts/CMDBDataContext';
 import { AppHeader } from './components/AppHeader';
 import { GraphVisualizationDashboard } from './components/GraphVisualizationDashboard';
 import { Loader2, AlertCircle, Wifi } from 'lucide-react';
@@ -80,12 +81,14 @@ function AppContent() {
 
   // Show main application when connected
   return (
-    <div className="min-h-screen bg-background">
-      <AppHeader />
-      <main className="container mx-auto px-4 py-8">
-        <GraphVisualizationDashboard isConnected={state.status.connected} />
-      </main>
-    </div>
+    <CMDBDataProvider>
+      <div className="min-h-screen bg-background">
+        <AppHeader />
+        <main className="container mx-auto px-4 py-8">
+          <GraphVisualizationDashboard isConnected={state.status.connected} />
+        </main>
+      </div>
+    </CMDBDataProvider>
   );
 }
 

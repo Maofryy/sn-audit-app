@@ -25,6 +25,8 @@ export interface AuthError {
 
 class AuthService {
     private config = getEnvironmentConfig();
+    private _isTestingConnection = false;
+    private _lastTestResult: { success: boolean; error?: string; responseTime?: number; mode?: string } | null = null;
 
     constructor() {
         envLog.info(`AuthService initialized for ${this.config.mode} mode`);
@@ -197,6 +199,26 @@ class AuthService {
 
     // Test connection with detailed response
     async testConnection(): Promise<{ success: boolean; error?: string; responseTime?: number; mode?: string }> {
+        // Prevent duplicate test connection calls
+        if (this._isTestingConnection && this._lastTestResult) {
+            return this._lastTestResult;
+        }
+
+        if (this._isTestingConnection) {
+            // If we're testing but no cached result yet, wait for the first call to complete
+            return new Promise((resolve) => {
+                const checkResult = () => {
+                    if (this._lastTestResult) {
+                        resolve(this._lastTestResult);
+                    } else {
+                        setTimeout(checkResult, 50);
+                    }
+                };
+                checkResult();
+            });
+        }
+
+        this._isTestingConnection = true;
         const startTime = Date.now();
 
         try {
@@ -207,11 +229,13 @@ class AuthService {
             const responseTime = Date.now() - startTime;
 
             if (response.ok) {
-                return {
+                const result = {
                     success: true,
                     responseTime,
                     mode: this.config.mode,
                 };
+                this._lastTestResult = result;
+                return result;
             } else {
                 let errorMessage = `HTTP ${response.status}`;
                 if (response.status === 401) {
@@ -222,12 +246,14 @@ class AuthService {
                     errorMessage = "ServiceNow instance not found - check URL";
                 }
 
-                return {
+                const result = {
                     success: false,
                     error: errorMessage,
                     responseTime,
                     mode: this.config.mode,
                 };
+                this._lastTestResult = result;
+                return result;
             }
         } catch (error) {
             const responseTime = Date.now() - startTime;
@@ -239,12 +265,20 @@ class AuthService {
                 errorMessage = error.message;
             }
 
-            return {
+            const result = {
                 success: false,
                 error: errorMessage,
                 responseTime,
                 mode: this.config.mode,
             };
+            this._lastTestResult = result;
+            return result;
+        } finally {
+            this._isTestingConnection = false;
+            // Clear cache after a short delay to allow for quick successive calls
+            setTimeout(() => {
+                this._lastTestResult = null;
+            }, 2000);
         }
     }
 
