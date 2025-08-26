@@ -568,23 +568,29 @@ export class ServiceNowService {
     private isCustomTable(table: Partial<TableMetadata>): boolean {
         // Custom table indicators
         const customPrefixes = ["u_", "x_", "custom_"];
-        const systemUsers = ["system", "admin", "ServiceNow"];
-
-        // Check naming pattern
+        const systemUsers = ["system", "admin", "ServiceNow", "maint", "glideapp"];
+        
+        // First check: naming pattern (most reliable indicator)
         if (customPrefixes.some((prefix) => table.name?.startsWith(prefix))) {
             return true;
         }
-
-        // Check creation metadata
-        if (table.sys_created_by && !systemUsers.includes(table.sys_created_by)) {
-            return true;
+        
+        // If table name clearly indicates it's a base ServiceNow table, not custom
+        const baseTablePatterns = [
+            /^cmdb_/, /^sys_/, /^task/, /^incident/, /^problem/, /^change_/, 
+            /^sc_/, /^kb_/, /^hr_/, /^alm_/, /^ast_/, /^core_/, /^cmn_/
+        ];
+        
+        if (baseTablePatterns.some(pattern => pattern.test(table.name || ''))) {
+            return false;
         }
 
-        // Check creation date (tables created after typical implementation timeframe)
-        if (table.sys_created_on) {
-            const createdDate = new Date(table.sys_created_on);
-            const cutoffDate = new Date("2020-01-01"); // Adjust based on when ServiceNow was implemented
-            return createdDate > cutoffDate;
+        // Check creation metadata - but be more conservative
+        // Only consider truly custom if created by non-system user AND has custom prefix
+        if (table.sys_created_by && 
+            !systemUsers.includes(table.sys_created_by) &&
+            table.name?.match(/^(u_|x_|custom_)/)) {
+            return true;
         }
 
         return false;

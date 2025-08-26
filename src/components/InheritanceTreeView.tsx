@@ -19,6 +19,7 @@ interface TreeNodeData {
   customFieldCount?: number;
   recordCount?: number;
   relationships?: FieldMetadata[];
+  _isFiltered?: boolean; // Track if node is visually filtered
 }
 
 interface NodeDetails {
@@ -46,6 +47,11 @@ export function InheritanceTreeView() {
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [collapsedNodes, setCollapsedNodes] = useState(new Set<string>());
+  const [visibleTableTypes, setVisibleTableTypes] = useState({
+    base: true,
+    extended: true,
+    custom: true
+  });
   
   // Refs for DOM access
   const containerRef = useRef<HTMLDivElement>(null);
@@ -155,8 +161,12 @@ export function InheritanceTreeView() {
 
   // Convert hierarchy to tree structure
   const convertHierarchyToTree = useCallback((node: { table: TableMetadata; children?: any[]; customFieldCount?: number; totalRecordCount?: number }): TreeNodeData => {
-    const tableType = node.table.is_custom ? 'custom' : 
-                     node.table.name === 'cmdb_ci' || node.table.name === 'cmdb' ? 'base' : 'extended';
+    // Use the table_type already computed by the ServiceNow service
+    // This ensures consistency with the backend logic
+    const tableType = node.table.table_type || (
+      node.table.is_custom ? 'custom' : 
+      (node.table.name === 'cmdb_ci' || node.table.name === 'cmdb') ? 'base' : 'extended'
+    );
     
     const treeNode = {
       name: node.table.name,
@@ -167,7 +177,6 @@ export function InheritanceTreeView() {
       recordCount: node.totalRecordCount,
       children: node.children?.map(convertHierarchyToTree)
     };
-    
     
     return treeNode;
   }, []);
@@ -242,12 +251,43 @@ export function InheritanceTreeView() {
     setIsDragging(false);
   }, []);
 
+  // Apply visual filtering - show all nodes but dim filtered ones
+  const applyVisualFiltering = useCallback((node: TreeNodeData): TreeNodeData => {
+    // Recursively apply filtering to all children first
+    const processedChildren = node.children
+      ?.map(child => applyVisualFiltering(child)) || [];
+    
+    // Check if this node has any visible descendant
+    const hasVisibleDescendant = (n: TreeNodeData): boolean => {
+      if (n.type === 'base' || visibleTableTypes[n.type]) {
+        return true;
+      }
+      return n.children?.some(child => hasVisibleDescendant(child)) || false;
+    };
+    
+    // Determine if this node should be dimmed
+    // Don't dim if: it's a base table, it's visible, OR it has visible descendants (to maintain tree structure)
+    const shouldNotDim = node.type === 'base' || 
+                         visibleTableTypes[node.type] || 
+                         hasVisibleDescendant(node);
+    
+    return {
+      ...node,
+      children: processedChildren.length > 0 ? processedChildren : undefined,
+      // Add a property to track if this node should be visually dimmed
+      _isFiltered: !shouldNotDim
+    };
+  }, [visibleTableTypes]);
+
   // Use D3 to compute tree layout - responsive to dimensions
   const d3TreeLayout = useMemo(() => {
     if (!treeData) return null;
     
-    // Create D3 hierarchy from our data
-    const root = d3.hierarchy(treeData, d => d.children);
+    // Apply visual filtering to the tree data (show all nodes, dim filtered ones)
+    const visuallyFilteredTreeData = applyVisualFiltering(treeData);
+    
+    // Create D3 hierarchy from our visually filtered data
+    const root = d3.hierarchy(visuallyFilteredTreeData, d => d.children);
     
     // Adaptive layout for large datasets
     const nodeCount = root.descendants().length;
@@ -278,7 +318,7 @@ export function InheritanceTreeView() {
       bounds: { width: width + margin.left + margin.right, height: height + margin.top + margin.bottom },
       margin
     };
-  }, [treeData, dimensions.width, dimensions.height]);
+  }, [treeData, dimensions.width, dimensions.height, applyVisualFiltering]);
 
   // Control handlers for zoom and pan
   const handleZoomIn = () => {
@@ -317,15 +357,27 @@ export function InheritanceTreeView() {
     const node = d3Node.data; // Original data
     const isSelected = selectedNode?.name === node.name;
     const isHovered = hoveredNode?.name === node.name;
+    const isFiltered = node._isFiltered;
     const { margin } = d3TreeLayout;
     
+    // Get node color and apply dimming if filtered
+    let nodeColor = getNodeColor(node.type, isHovered, isSelected);
+    let textColor = "#374151";
+    let opacity = 1;
+    
+    if (isFiltered) {
+      nodeColor = "#d1d5db"; // Gray color for filtered nodes
+      textColor = "#9ca3af";
+      opacity = 0.5;
+    }
+    
     return (
-      <g key={node.name}>
+      <g key={node.name} opacity={opacity}>
         <circle
           cx={d3Node.y + margin.left}
           cy={d3Node.x + margin.top}
           r={isSelected ? 10 : (isHovered ? 9 : 8)}
-          fill={getNodeColor(node.type, isHovered, isSelected)}
+          fill={nodeColor}
           stroke={isSelected ? "#374151" : "#fff"}
           strokeWidth={isSelected ? 3 : 2}
           style={{ cursor: 'pointer' }}
@@ -337,7 +389,7 @@ export function InheritanceTreeView() {
           y={d3Node.x + margin.top - 15}
           textAnchor="middle"
           fontSize="12"
-          fill="#374151"
+          fill={textColor}
           fontWeight={node.type === 'custom' ? 'bold' : 'normal'}
           style={{ pointerEvents: 'none', userSelect: 'none' }}
         >
@@ -352,6 +404,12 @@ export function InheritanceTreeView() {
     if (!d3TreeLayout) return null;
     
     const { margin } = d3TreeLayout;
+    
+    // Determine if link should be dimmed (when target node is filtered)
+    const isTargetFiltered = d3Link.target.data._isFiltered;
+    const linkOpacity = isTargetFiltered ? 0.3 : 1;
+    const strokeColor = isTargetFiltered ? "#e2e8f0" : "#cbd5e1";
+    
     return (
       <path
         key={`${d3Link.source.data.name}-${d3Link.target.data.name}`}
@@ -360,8 +418,9 @@ export function InheritanceTreeView() {
              ${(d3Link.source.y + d3Link.target.y) / 2 + margin.left},${d3Link.target.x + margin.top}
              ${d3Link.target.y + margin.left},${d3Link.target.x + margin.top}`}
         fill="none"
-        stroke="#cbd5e1"
+        stroke={strokeColor}
         strokeWidth="2"
+        opacity={linkOpacity}
       />
     );
   };
@@ -427,16 +486,44 @@ export function InheritanceTreeView() {
                     </p>
                   )}
                 </div>
-                <div className="flex gap-2">
-                  <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
-                    Base Tables
-                  </Badge>
-                  <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
-                    Extended Tables  
-                  </Badge>
-                  <Badge variant="outline" className="bg-orange-50 text-orange-700 border-orange-200">
-                    Custom Tables
-                  </Badge>
+                <div className="flex items-center gap-3">
+                  <span className="text-sm text-muted-foreground font-medium">Tables filter:</span>
+                  <div className="flex gap-2">
+                    <button
+                      disabled
+                      className="px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700 border border-blue-300 cursor-not-allowed opacity-75 flex items-center gap-1"
+                      title="Base tables are always visible to maintain tree structure"
+                    >
+                      <div className="w-2 h-2 rounded-full bg-blue-600"></div>
+                      Base
+                    </button>
+                    <button
+                      onClick={() => setVisibleTableTypes(prev => ({ ...prev, extended: !prev.extended }))}
+                      className={`px-2 py-1 rounded-full text-xs font-medium transition-all duration-200 flex items-center gap-1 ${
+                        visibleTableTypes.extended
+                          ? 'bg-green-100 text-green-700 border border-green-300'
+                          : 'bg-gray-200 text-gray-500 border border-gray-300'
+                      }`}
+                    >
+                      <div className={`w-2 h-2 rounded-full ${
+                        visibleTableTypes.extended ? 'bg-green-600' : 'bg-gray-400'
+                      }`}></div>
+                      Extended
+                    </button>
+                    <button
+                      onClick={() => setVisibleTableTypes(prev => ({ ...prev, custom: !prev.custom }))}
+                      className={`px-2 py-1 rounded-full text-xs font-medium transition-all duration-200 flex items-center gap-1 ${
+                        visibleTableTypes.custom
+                          ? 'bg-orange-100 text-orange-700 border border-orange-300'
+                          : 'bg-gray-200 text-gray-500 border border-gray-300'
+                      }`}
+                    >
+                      <div className={`w-2 h-2 rounded-full ${
+                        visibleTableTypes.custom ? 'bg-orange-600' : 'bg-gray-400'
+                      }`}></div>
+                      Custom
+                    </button>
+                  </div>
                 </div>
               </div>
             </CardHeader>
@@ -475,10 +562,10 @@ export function InheritanceTreeView() {
                     </text>
                     <circle cx="8" cy="16" r="5" fill="#3b82f6" />
                     <text x="20" y="20" fontSize="11" fill="#374151">Base Tables</text>
-                    <circle cx="8" cy="32" r="5" fill="#10b981" />
-                    <text x="20" y="36" fontSize="11" fill="#374151">Extended Tables</text>
-                    <circle cx="8" cy="48" r="5" fill="#ea580c" />
-                    <text x="20" y="52" fontSize="11" fill="#374151">Custom Tables</text>
+                    <circle cx="8" cy="32" r="5" fill={visibleTableTypes.extended ? "#10b981" : "#d1d5db"} />
+                    <text x="20" y="36" fontSize="11" fill={visibleTableTypes.extended ? "#374151" : "#9ca3af"}>Extended Tables</text>
+                    <circle cx="8" cy="48" r="5" fill={visibleTableTypes.custom ? "#ea580c" : "#d1d5db"} />
+                    <text x="20" y="52" fontSize="11" fill={visibleTableTypes.custom ? "#374151" : "#9ca3af"}>Custom Tables</text>
                   </g>
                 </svg>
               </div>
