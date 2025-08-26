@@ -56,7 +56,7 @@ export function GraphSidebar({
   onCustomOnlyToggle,
   customTableCount = 0
 }: GraphSidebarProps) {
-  const [showFilters, setShowFilters] = useState(false);
+  const [showFilters, setShowFilters] = useState(true);
 
   const layoutIcons = {
     'tree': Network,
@@ -150,18 +150,18 @@ export function GraphSidebar({
           size="sm"
           variant={showFilters ? "default" : "ghost"}
           onClick={() => setShowFilters(!showFilters)}
-          className="w-7 h-7 p-0 relative group"
-          title="Toggle Filters"
+          className={`w-7 h-7 p-0 relative group ${showFilters ? 'shadow-md ring-1 ring-blue-500/20' : ''}`}
+          title={showFilters ? "Hide Filters" : "Show Filters"}
         >
-          <Filter className="h-4 w-4" />
+          <Filter className={`h-4 w-4 ${showFilters ? 'text-white' : ''}`} />
           <div className="absolute left-full ml-2 px-2 py-1 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-10">
-            Toggle Filters
+            {showFilters ? "Hide Filters" : "Show Filters"}
           </div>
         </Button>
         
         {/* Filter Options */}
         {showFilters && (
-          <div className="absolute left-full ml-2 top-0 bg-white border border-gray-200 rounded-lg shadow-lg p-3 space-y-3 min-w-[180px]">
+          <div className="absolute left-full ml-2 top-0 bg-white/95 backdrop-blur-sm border border-gray-200 rounded-lg shadow-lg p-3 space-y-3 min-w-[200px]">
             {/* Custom Table Quick Actions */}
             <div className="border-b pb-3">
               <div className="text-xs font-medium text-gray-700 mb-2 flex items-center gap-1">

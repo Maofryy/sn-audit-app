@@ -9,6 +9,9 @@ import { CheckCircle, ZoomIn, ZoomOut, RotateCcw, Loader2, AlertTriangle, Databa
 import { GraphLayoutType } from './GraphControls';
 import { GraphSidebar } from './GraphSidebar';
 import { GraphSearchOverlay } from './GraphSearchOverlay';
+import { VirtualizedRenderer, useVirtualizedPerformance } from './VirtualizedRenderer';
+import { HierarchyMiniMap } from './HierarchyMiniMap';
+import { PerformanceMonitor } from '@/utils/performanceMonitor';
 import { serviceNowService } from '@/services/serviceNowService';
 import { useCMDBData } from '@/contexts/CMDBDataContext';
 import { TableMetadata, FieldMetadata } from '@/types';
@@ -63,6 +66,13 @@ export function InheritanceTreeView() {
   const [customTableEmphasis, setCustomTableEmphasis] = useState<'subtle' | 'moderate' | 'maximum'>('moderate');
   const [showCustomOnly, setShowCustomOnly] = useState(false);
   const [highlightedPaths, setHighlightedPaths] = useState<Set<string>>(new Set());
+  
+  // Performance optimization state
+  const [performanceMode, setPerformanceMode] = useState<'auto' | 'high' | 'maximum'>('auto');
+  const [virtualizedNodes, setVirtualizedNodes] = useState<any[]>([]);
+  const [virtualizedLinks, setVirtualizedLinks] = useState<any[]>([]);
+  const { measurePerformance } = useVirtualizedPerformance();
+  const performanceMonitor = useRef(new PerformanceMonitor());
   
   // Refs for DOM access
   const containerRef = useRef<HTMLDivElement>(null);
@@ -157,7 +167,7 @@ export function InheritanceTreeView() {
     };
   }, [visibleTableTypes, searchTerm, showCustomOnly]);
 
-  // Simple tree layout (keeping original logic)
+  // Enhanced tree layout with full canvas utilization
   const d3TreeLayout = useMemo(() => {
     if (!treeData) return null;
     
@@ -165,30 +175,75 @@ export function InheritanceTreeView() {
     const root = d3.hierarchy(visuallyFilteredTreeData, d => d.children);
     
     const nodeCount = root.descendants().length;
-    const margin = { top: 60, right: 150, bottom: 60, left: 150 };
+    const margin = { top: 40, right: 40, bottom: 40, left: 40 };
     
-    const baseWidth = Math.max(800, dimensions.width - margin.left - margin.right);
-    const baseHeight = Math.max(400, dimensions.height - margin.top - margin.bottom);
+    // Use full available canvas dimensions
+    const availableWidth = dimensions.width - margin.left - margin.right;
+    const availableHeight = dimensions.height - margin.top - margin.bottom;
     
-    const width = nodeCount > 100 ? baseWidth * 1.5 : baseWidth;
-    const height = nodeCount > 100 ? Math.max(baseHeight * 3, nodeCount * 15) : Math.max(baseHeight * 2, nodeCount * 12);
+    // Calculate optimal layout dimensions based on tree structure
+    const depth = Math.max(...root.descendants().map(d => d.depth));
+    const maxNodesAtLevel = Math.max(...Array.from({length: depth + 1}, (_, i) => 
+      root.descendants().filter(d => d.depth === i).length
+    ));
     
+    // Dynamic sizing that utilizes full canvas
+    let layoutWidth = Math.max(availableWidth, depth * 200); // Minimum spacing between levels
+    let layoutHeight = Math.max(availableHeight, maxNodesAtLevel * 50); // Minimum spacing between siblings
+    
+    // Performance-based adjustments
+    const isHighPerformance = nodeCount > 500;
+    const isUltraHighPerformance = nodeCount > 1000;
+    
+    if (isUltraHighPerformance) {
+      layoutWidth = Math.max(layoutWidth, availableWidth * 1.2);
+      layoutHeight = Math.max(layoutHeight, availableHeight * 1.5);
+    } else if (isHighPerformance) {
+      layoutWidth = Math.max(layoutWidth, availableWidth * 1.1);
+      layoutHeight = Math.max(layoutHeight, availableHeight * 1.3);
+    }
+    
+    // Use horizontal layout (width and height swapped for d3.tree)
     const treeLayout = d3.tree()
-      .size([height, width])
+      .size([layoutHeight, layoutWidth])
       .separation((a, b) => {
-        const baseSeparation = (a.parent === b.parent ? 3.0 : 5.5);
-        return nodeCount > 100 ? baseSeparation * 1.8 : baseSeparation;
+        // Adjust separation based on tree density
+        const baseSeparation = 1.0;
+        const densityFactor = Math.min(2.0, Math.max(0.5, 50 / maxNodesAtLevel));
+        
+        if (a.parent === b.parent) {
+          return baseSeparation * densityFactor;
+        }
+        return baseSeparation * densityFactor * 1.5;
       });
     
     const layoutRoot = treeLayout(root);
     
+    // Calculate actual bounds used by the layout
+    const allNodes = layoutRoot.descendants();
+    const minX = Math.min(...allNodes.map(d => d.x));
+    const maxX = Math.max(...allNodes.map(d => d.x));
+    const minY = Math.min(...allNodes.map(d => d.y));
+    const maxY = Math.max(...allNodes.map(d => d.y));
+    
+    const actualWidth = maxY - minY + 100; // Add padding
+    const actualHeight = maxX - minX + 100;
+    
     return {
       nodes: layoutRoot.descendants(),
       links: layoutRoot.links(),
-      bounds: { width: width + margin.left + margin.right, height: height + margin.top + margin.bottom },
-      margin
+      bounds: { 
+        width: Math.max(actualWidth, availableWidth) + margin.left + margin.right, 
+        height: Math.max(actualHeight, availableHeight) + margin.top + margin.bottom 
+      },
+      margin,
+      nodeCount,
+      isHighPerformance,
+      isUltraHighPerformance,
+      layoutWidth: actualWidth,
+      layoutHeight: actualHeight
     };
-  }, [treeData, dimensions.width, dimensions.height, applyVisualFiltering]);
+  }, [treeData, dimensions.width, dimensions.height, applyVisualFiltering, performanceMode]);
 
   // Control handlers
   const handleZoomIn = () => {
@@ -210,24 +265,39 @@ export function InheritanceTreeView() {
   };
 
   const handleResetView = () => {
-    if (zoomRef.current && svgRef.current) {
+    if (zoomRef.current && svgRef.current && d3TreeLayout) {
+      // Calculate centered initial transform
+      const initialScale = Math.min(
+        dimensions.width / d3TreeLayout.bounds.width,
+        dimensions.height / d3TreeLayout.bounds.height,
+        1
+      ) * 0.9;
+      
+      const centerX = (dimensions.width - d3TreeLayout.bounds.width * initialScale) / 2;
+      const centerY = (dimensions.height - d3TreeLayout.bounds.height * initialScale) / 2;
+      
+      const resetTransform = d3.zoomIdentity
+        .translate(centerX, centerY)
+        .scale(initialScale);
+      
       d3.select(svgRef.current)
         .transition()
         .duration(500)
-        .call(zoomRef.current.transform, d3.zoomIdentity);
+        .call(zoomRef.current.transform, resetTransform);
     }
     setSelectedNode(null);
     setHoveredNode(null);
+    setHighlightedPaths(new Set());
   };
 
-  // Setup D3 zoom behavior
+  // Setup D3 zoom behavior with proper initial positioning
   useEffect(() => {
-    if (!svgRef.current || !treeData) return;
+    if (!svgRef.current || !treeData || !d3TreeLayout) return;
 
     const svg = d3.select(svgRef.current);
     
     const zoom = d3.zoom<SVGSVGElement, unknown>()
-      .scaleExtent([0.05, 25])
+      .scaleExtent([0.1, 10])
       .on('zoom', (event) => {
         setTransform({
           x: event.transform.x,
@@ -238,11 +308,27 @@ export function InheritanceTreeView() {
 
     svg.call(zoom);
     zoomRef.current = zoom;
+    
+    // Center the graph initially
+    const initialScale = Math.min(
+      dimensions.width / d3TreeLayout.bounds.width,
+      dimensions.height / d3TreeLayout.bounds.height,
+      1
+    ) * 0.9; // 90% to add some padding
+    
+    const centerX = (dimensions.width - d3TreeLayout.bounds.width * initialScale) / 2;
+    const centerY = (dimensions.height - d3TreeLayout.bounds.height * initialScale) / 2;
+    
+    const initialTransform = d3.zoomIdentity
+      .translate(centerX, centerY)
+      .scale(initialScale);
+    
+    svg.call(zoom.transform, initialTransform);
 
     return () => {
       svg.on('.zoom', null);
     };
-  }, [treeData]);
+  }, [treeData, d3TreeLayout, dimensions]);
 
   // Resize handler
   useEffect(() => {
@@ -275,8 +361,8 @@ export function InheritanceTreeView() {
     };
   }, []);
 
-  // Enhanced node styling with orange custom table emphasis
-  const getNodeStyle = (nodeType: string, isSelected: boolean, isHovered: boolean, isFiltered: boolean) => {
+  // Enhanced node styling with orange custom table emphasis and LOD
+  const getNodeStyle = (nodeType: string, isSelected: boolean, isHovered: boolean, isFiltered: boolean, lodLevel: 'full' | 'simplified' | 'minimal' = 'full') => {
     const styles = {
       base: {
         fill: '#1e40af',
@@ -299,6 +385,21 @@ export function InheritanceTreeView() {
     };
 
     let style = styles[nodeType as keyof typeof styles] || styles.extended;
+    
+    // Level of detail adjustments
+    if (lodLevel === 'simplified') {
+      style = {
+        ...style,
+        radius: style.radius * 0.8,
+        strokeWidth: Math.max(1, style.strokeWidth - 1)
+      };
+    } else if (lodLevel === 'minimal') {
+      style = {
+        ...style,
+        radius: style.radius * 0.6,
+        strokeWidth: 1
+      };
+    }
     
     if (isFiltered) {
       style = {
@@ -324,8 +425,28 @@ export function InheritanceTreeView() {
     return style;
   };
 
-  // Render node
-  const renderNode = (d3Node: d3.HierarchyPointNode<TreeNodeData>) => {
+  // Handle virtualized rendering updates
+  const handleVirtualizedRender = useCallback((nodes: any[], links: any[]) => {
+    setVirtualizedNodes(nodes);
+    setVirtualizedLinks(links);
+  }, []);
+  
+  // Auto-detect performance mode based on node count
+  useEffect(() => {
+    if (!d3TreeLayout) return;
+    
+    const nodeCount = d3TreeLayout.nodeCount || 0;
+    if (performanceMode === 'auto') {
+      if (nodeCount > 1000) {
+        setPerformanceMode('maximum');
+      } else if (nodeCount > 500) {
+        setPerformanceMode('high');
+      }
+    }
+  }, [d3TreeLayout, performanceMode]);
+
+  // Render node with LOD and virtualization support
+  const renderNode = (d3Node: d3.HierarchyPointNode<TreeNodeData>, lodLevel: 'full' | 'simplified' | 'minimal' = 'full') => {
     if (!d3TreeLayout) return null;
     
     const node = d3Node.data;
@@ -335,7 +456,11 @@ export function InheritanceTreeView() {
     const isCustom = node.type === 'custom';
     const { margin } = d3TreeLayout;
     
-    const nodeStyle = getNodeStyle(node.type, isSelected, isHovered, isFiltered);
+    // Performance measurements
+    const perf = measurePerformance();
+    performanceMonitor.current.startRender();
+    
+    const nodeStyle = getNodeStyle(node.type, isSelected, isHovered, isFiltered, lodLevel);
     let textColor = isFiltered ? "#9ca3af" : "#374151";
     let opacity = isFiltered ? 0.5 : 1;
     
@@ -349,6 +474,11 @@ export function InheritanceTreeView() {
       
       nodeStyle.radius = Math.round(nodeStyle.radius * emphasisScale);
     }
+    
+    // Simplified rendering for performance
+    const shouldShowLabel = lodLevel === 'full' || (lodLevel === 'simplified' && isCustom);
+    const shouldShowGlow = lodLevel === 'full' && isCustom && !isFiltered;
+    const shouldShowIndicator = lodLevel !== 'minimal' && isCustom && !isFiltered;
     
     return (
       <g key={node.name} opacity={opacity} className={isCustom ? 'custom-table-node' : ''}>
@@ -539,6 +669,11 @@ export function InheritanceTreeView() {
                   <CardTitle className="text-lg">CMDB Table Hierarchy</CardTitle>
                   <p className="text-sm text-muted-foreground mt-1">
                     Root: {treeData.name} | Tables: {d3TreeLayout.nodes.filter(n => !n.data._isFiltered).length}/{d3TreeLayout.nodes.length}
+            {d3TreeLayout.isHighPerformance && (
+              <span className="ml-2 px-2 py-1 bg-orange-100 text-orange-700 text-xs rounded-full font-medium">
+                ⚡ Performance Mode
+              </span>
+            )}
                   </p>
                 </div>
               </div>
@@ -577,18 +712,53 @@ export function InheritanceTreeView() {
                   nodeCount={d3TreeLayout.nodes.length}
                   filteredCount={d3TreeLayout.nodes.filter(n => !n.data._isFiltered).length}
                 />
+                
+                {/* Hierarchy Mini-Map */}
+                <HierarchyMiniMap
+                  treeData={treeData}
+                  selectedNode={selectedNode}
+                  onNodeClick={handleNodeClick}
+                  transform={transform}
+                  bounds={d3TreeLayout.bounds}
+                />
 
+                {/* Virtualized Renderer for Performance */}
+                {d3TreeLayout.isHighPerformance && (
+                  <VirtualizedRenderer
+                    nodes={d3TreeLayout.nodes}
+                    links={d3TreeLayout.links}
+                    transform={transform}
+                    bounds={d3TreeLayout.bounds}
+                    customTableEmphasis={customTableEmphasis}
+                    onRender={handleVirtualizedRender}
+                  />
+                )}
+                
                 <svg
                   ref={svgRef}
-                  width="100%"
-                  height="100%"
-                  viewBox={`0 0 ${d3TreeLayout.bounds.width} ${d3TreeLayout.bounds.height}`}
-                  preserveAspectRatio="xMidYMid meet"
-                  className="cursor-grab"
+                  width={dimensions.width}
+                  height={dimensions.height}
+                  style={{ maxWidth: '100%', maxHeight: '100%' }}
+                  className="cursor-grab border border-gray-200 rounded"
                 >
                   <g transform={`translate(${transform.x}, ${transform.y}) scale(${transform.k})`}>
-                    {d3TreeLayout.links.map(renderLink)}
-                    {d3TreeLayout.nodes.map(renderNode)}
+                    {/* Performance-optimized rendering */}
+                    {d3TreeLayout.isHighPerformance ? (
+                      // Virtualized rendering for high node counts
+                      <>
+                        {virtualizedLinks.map(link => renderLink(link.originalLink))}
+                        {virtualizedNodes.map(node => {
+                          const lodLevel = node.lodLevel || 'full';
+                          return renderNode(node.originalNode, lodLevel);
+                        })}
+                      </>
+                    ) : (
+                      // Standard rendering for normal node counts
+                      <>
+                        {d3TreeLayout.links.map(renderLink)}
+                        {d3TreeLayout.nodes.map(node => renderNode(node))}
+                      </>
+                    )}
                   </g>
                 </svg>
               </div>
