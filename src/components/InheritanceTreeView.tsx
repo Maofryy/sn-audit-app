@@ -6,6 +6,9 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { CheckCircle, ZoomIn, ZoomOut, RotateCcw, Loader2, AlertTriangle, Database, Users, Calendar } from 'lucide-react';
+import { GraphLayoutType } from './GraphControls';
+import { GraphSidebar } from './GraphSidebar';
+import { GraphSearchOverlay } from './GraphSearchOverlay';
 import { serviceNowService } from '@/services/serviceNowService';
 import { useCMDBData } from '@/contexts/CMDBDataContext';
 import { TableMetadata, FieldMetadata } from '@/types';
@@ -19,7 +22,7 @@ interface TreeNodeData {
   customFieldCount?: number;
   recordCount?: number;
   relationships?: FieldMetadata[];
-  _isFiltered?: boolean; // Track if node is visually filtered
+  _isFiltered?: boolean;
 }
 
 interface NodeDetails {
@@ -46,12 +49,20 @@ export function InheritanceTreeView() {
   const [transform, setTransform] = useState({ x: 0, y: 0, k: 1 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const [collapsedNodes, setCollapsedNodes] = useState(new Set<string>());
+  
+  // New state for sidebar and search
+  const [layoutType, setLayoutType] = useState<GraphLayoutType>('tree');
+  const [searchTerm, setSearchTerm] = useState('');
   const [visibleTableTypes, setVisibleTableTypes] = useState({
     base: true,
     extended: true,
     custom: true
   });
+  
+  // Enhanced custom table controls
+  const [customTableEmphasis, setCustomTableEmphasis] = useState<'subtle' | 'moderate' | 'maximum'>('moderate');
+  const [showCustomOnly, setShowCustomOnly] = useState(false);
+  const [highlightedPaths, setHighlightedPaths] = useState<Set<string>>(new Set());
   
   // Refs for DOM access
   const containerRef = useRef<HTMLDivElement>(null);
@@ -66,7 +77,6 @@ export function InheritanceTreeView() {
         setError(null);
         
         const hierarchy = await serviceNowService.buildTableHierarchy();
-        
         const treeStructure = convertHierarchyToTree(hierarchy.root);
         
         setTreeData(treeStructure);
@@ -79,56 +89,162 @@ export function InheritanceTreeView() {
     };
 
     loadTableHierarchy();
-  }, []); // convertHierarchyToTree is stable due to useCallback with no deps
+  }, []);
 
-  // Load node details on hover
-  useEffect(() => {
-    const loadNodeDetails = async () => {
-      if (!hoveredNode?.table) {
-        setNodeDetails(null);
-        setLoadingDetails(false);
-        return;
+  // Convert hierarchy to tree structure
+  const convertHierarchyToTree = useCallback((node: { table: TableMetadata; children?: any[]; customFieldCount?: number; totalRecordCount?: number }): TreeNodeData => {
+    const tableType = node.table.table_type || (
+      node.table.is_custom ? 'custom' : 
+      (node.table.name === 'cmdb_ci' || node.table.name === 'cmdb') ? 'base' : 'extended'
+    );
+    
+    return {
+      name: node.table.name,
+      label: node.table.label,
+      type: tableType,
+      table: node.table,
+      customFieldCount: node.customFieldCount,
+      recordCount: node.totalRecordCount,
+      children: node.children?.map(convertHierarchyToTree)
+    };
+  }, []);
+
+  // Apply visual filtering based on search and table type filters
+  const applyVisualFiltering = useCallback((node: TreeNodeData): TreeNodeData => {
+    const processedChildren = node.children?.map(child => applyVisualFiltering(child)) || [];
+    
+    // Check if node matches search term
+    const matchesSearch = !searchTerm || 
+      node.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      node.label.toLowerCase().includes(searchTerm.toLowerCase());
+    
+    // Custom-only mode filtering
+    if (showCustomOnly) {
+      const isCustomOrHasCustomDescendant = (n: TreeNodeData): boolean => {
+        if (n.type === 'custom' && matchesSearch) return true;
+        return n.children?.some(child => isCustomOrHasCustomDescendant(child)) || false;
+      };
+      
+      const shouldShow = node.type === 'base' || isCustomOrHasCustomDescendant(node);
+      
+      return {
+        ...node,
+        children: processedChildren.length > 0 ? processedChildren : undefined,
+        _isFiltered: !shouldShow
+      };
+    }
+    
+    // Standard filtering logic
+    const hasVisibleDescendant = (n: TreeNodeData): boolean => {
+      const nodeMatchesFilter = n.type === 'base' || visibleTableTypes[n.type];
+      const nodeMatchesSearch = !searchTerm || 
+        n.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        n.label.toLowerCase().includes(searchTerm.toLowerCase());
+      
+      if (nodeMatchesFilter && nodeMatchesSearch) {
+        return true;
       }
+      return n.children?.some(child => hasVisibleDescendant(child)) || false;
+    };
+    
+    // Determine if this node should be dimmed
+    const shouldNotDim = ((node.type === 'base' || visibleTableTypes[node.type]) && matchesSearch) || hasVisibleDescendant(node);
+    
+    return {
+      ...node,
+      children: processedChildren.length > 0 ? processedChildren : undefined,
+      _isFiltered: !shouldNotDim
+    };
+  }, [visibleTableTypes, searchTerm, showCustomOnly]);
 
-      // Immediately set basic details from hoveredNode data
-      setNodeDetails({
-        table: hoveredNode.table,
-        customFields: [],
-        referenceFields: [],
-        childTables: [],
-        recordCount: hoveredNode.recordCount
+  // Simple tree layout (keeping original logic)
+  const d3TreeLayout = useMemo(() => {
+    if (!treeData) return null;
+    
+    const visuallyFilteredTreeData = applyVisualFiltering(treeData);
+    const root = d3.hierarchy(visuallyFilteredTreeData, d => d.children);
+    
+    const nodeCount = root.descendants().length;
+    const margin = { top: 60, right: 150, bottom: 60, left: 150 };
+    
+    const baseWidth = Math.max(800, dimensions.width - margin.left - margin.right);
+    const baseHeight = Math.max(400, dimensions.height - margin.top - margin.bottom);
+    
+    const width = nodeCount > 100 ? baseWidth * 1.5 : baseWidth;
+    const height = nodeCount > 100 ? Math.max(baseHeight * 3, nodeCount * 15) : Math.max(baseHeight * 2, nodeCount * 12);
+    
+    const treeLayout = d3.tree()
+      .size([height, width])
+      .separation((a, b) => {
+        const baseSeparation = (a.parent === b.parent ? 3.0 : 5.5);
+        return nodeCount > 100 ? baseSeparation * 1.8 : baseSeparation;
+      });
+    
+    const layoutRoot = treeLayout(root);
+    
+    return {
+      nodes: layoutRoot.descendants(),
+      links: layoutRoot.links(),
+      bounds: { width: width + margin.left + margin.right, height: height + margin.top + margin.bottom },
+      margin
+    };
+  }, [treeData, dimensions.width, dimensions.height, applyVisualFiltering]);
+
+  // Control handlers
+  const handleZoomIn = () => {
+    if (zoomRef.current && svgRef.current) {
+      d3.select(svgRef.current)
+        .transition()
+        .duration(300)
+        .call(zoomRef.current.scaleBy, 1.5);
+    }
+  };
+
+  const handleZoomOut = () => {
+    if (zoomRef.current && svgRef.current) {
+      d3.select(svgRef.current)
+        .transition()
+        .duration(300)
+        .call(zoomRef.current.scaleBy, 1 / 1.5);
+    }
+  };
+
+  const handleResetView = () => {
+    if (zoomRef.current && svgRef.current) {
+      d3.select(svgRef.current)
+        .transition()
+        .duration(500)
+        .call(zoomRef.current.transform, d3.zoomIdentity);
+    }
+    setSelectedNode(null);
+    setHoveredNode(null);
+  };
+
+  // Setup D3 zoom behavior
+  useEffect(() => {
+    if (!svgRef.current || !treeData) return;
+
+    const svg = d3.select(svgRef.current);
+    
+    const zoom = d3.zoom<SVGSVGElement, unknown>()
+      .scaleExtent([0.05, 25])
+      .on('zoom', (event) => {
+        setTransform({
+          x: event.transform.x,
+          y: event.transform.y,
+          k: event.transform.k
+        });
       });
 
-      setLoadingDetails(true);
+    svg.call(zoom);
+    zoomRef.current = zoom;
 
-      try {
-        const [customFields, referenceFields, childTables] = await Promise.all([
-          serviceNowService.getCustomFields(hoveredNode.table.name),
-          serviceNowService.getReferenceFields().then(fields => 
-            fields.filter(f => f.table === hoveredNode.table!.name)
-          ),
-          Promise.resolve(cmdbTablesData?.filter(t => t.super_class === hoveredNode.table!.sys_id) || [])
-        ]);
-
-        setNodeDetails({
-          table: hoveredNode.table,
-          customFields,
-          referenceFields,
-          childTables,
-          recordCount: hoveredNode.recordCount
-        });
-      } catch (err) {
-        console.error('Failed to load node details:', err);
-      } finally {
-        setLoadingDetails(false);
-      }
+    return () => {
+      svg.on('.zoom', null);
     };
+  }, [treeData]);
 
-    const timeoutId = setTimeout(loadNodeDetails, 200); // Debounce
-    return () => clearTimeout(timeoutId);
-  }, [hoveredNode]);
-
-  // Resize handler with debounce
+  // Resize handler
   useEffect(() => {
     let timeoutId: NodeJS.Timeout;
     
@@ -159,267 +275,224 @@ export function InheritanceTreeView() {
     };
   }, []);
 
-  // Convert hierarchy to tree structure
-  const convertHierarchyToTree = useCallback((node: { table: TableMetadata; children?: any[]; customFieldCount?: number; totalRecordCount?: number }): TreeNodeData => {
-    // Use the table_type already computed by the ServiceNow service
-    // This ensures consistency with the backend logic
-    const tableType = node.table.table_type || (
-      node.table.is_custom ? 'custom' : 
-      (node.table.name === 'cmdb_ci' || node.table.name === 'cmdb') ? 'base' : 'extended'
-    );
-    
-    const treeNode = {
-      name: node.table.name,
-      label: node.table.label,
-      type: tableType,
-      table: node.table,
-      customFieldCount: node.customFieldCount,
-      recordCount: node.totalRecordCount,
-      children: node.children?.map(convertHierarchyToTree)
+  // Enhanced node styling with orange custom table emphasis
+  const getNodeStyle = (nodeType: string, isSelected: boolean, isHovered: boolean, isFiltered: boolean) => {
+    const styles = {
+      base: {
+        fill: '#1e40af',
+        stroke: '#1e293b',
+        radius: 6,
+        strokeWidth: 2
+      },
+      extended: {
+        fill: '#059669',
+        stroke: '#1e293b', 
+        radius: 7,
+        strokeWidth: 2
+      },
+      custom: {
+        fill: '#ea580c',
+        stroke: '#9a3412',
+        radius: 10,
+        strokeWidth: 3
+      }
     };
-    
-    return treeNode;
-  }, []);
 
-  // Get node color based on type
-  const getNodeColor = (type: string, isHovered = false, isSelected = false) => {
-    const baseColors = {
-      'base': '#3b82f6', // Blue
-      'extended': '#10b981', // Green
-      'custom': '#ea580c', // Orange
-    };
+    let style = styles[nodeType as keyof typeof styles] || styles.extended;
     
-    let color = baseColors[type] || '#6b7280';
+    if (isFiltered) {
+      style = {
+        ...style,
+        fill: '#d1d5db',
+        stroke: '#9ca3af'
+      };
+    }
     
     if (isSelected) {
-      // Darken selected nodes
-      color = d3.color(color)?.darker(0.5)?.toString() || color;
+      style = {
+        ...style,
+        radius: style.radius + 2,
+        strokeWidth: style.strokeWidth + 1
+      };
     } else if (isHovered) {
-      // Brighten hovered nodes
-      color = d3.color(color)?.brighter(0.3)?.toString() || color;
+      style = {
+        ...style,
+        radius: style.radius + 1
+      };
     }
     
-    return color;
+    return style;
   };
 
-  // Setup D3 zoom and pan behavior
-  useEffect(() => {
-    if (!svgRef.current || !treeData) return;
-
-    const svg = d3.select(svgRef.current);
-    
-    const zoom = d3.zoom<SVGSVGElement, unknown>()
-      .scaleExtent([0.05, 25])
-      .on('zoom', (event) => {
-        setTransform({
-          x: event.transform.x,
-          y: event.transform.y,
-          k: event.transform.k
-        });
-      });
-
-    svg.call(zoom);
-    zoomRef.current = zoom;
-
-    return () => {
-      svg.on('.zoom', null);
-    };
-  }, [treeData]);
-
-  // Mouse drag handlers for panning
-  const handleMouseDown = useCallback((event: React.MouseEvent) => {
-    setIsDragging(true);
-    setDragStart({ x: event.clientX, y: event.clientY });
-  }, []);
-
-  const handleMouseMove = useCallback((event: React.MouseEvent) => {
-    if (!isDragging) return;
-    
-    const deltaX = event.clientX - dragStart.x;
-    const deltaY = event.clientY - dragStart.y;
-    
-    setTransform(prev => ({
-      ...prev,
-      x: prev.x + deltaX,
-      y: prev.y + deltaY
-    }));
-    
-    setDragStart({ x: event.clientX, y: event.clientY });
-  }, [isDragging, dragStart]);
-
-  const handleMouseUp = useCallback(() => {
-    setIsDragging(false);
-  }, []);
-
-  // Apply visual filtering - show all nodes but dim filtered ones
-  const applyVisualFiltering = useCallback((node: TreeNodeData): TreeNodeData => {
-    // Recursively apply filtering to all children first
-    const processedChildren = node.children
-      ?.map(child => applyVisualFiltering(child)) || [];
-    
-    // Check if this node has any visible descendant
-    const hasVisibleDescendant = (n: TreeNodeData): boolean => {
-      if (n.type === 'base' || visibleTableTypes[n.type]) {
-        return true;
-      }
-      return n.children?.some(child => hasVisibleDescendant(child)) || false;
-    };
-    
-    // Determine if this node should be dimmed
-    // Don't dim if: it's a base table, it's visible, OR it has visible descendants (to maintain tree structure)
-    const shouldNotDim = node.type === 'base' || 
-                         visibleTableTypes[node.type] || 
-                         hasVisibleDescendant(node);
-    
-    return {
-      ...node,
-      children: processedChildren.length > 0 ? processedChildren : undefined,
-      // Add a property to track if this node should be visually dimmed
-      _isFiltered: !shouldNotDim
-    };
-  }, [visibleTableTypes]);
-
-  // Use D3 to compute tree layout - responsive to dimensions
-  const d3TreeLayout = useMemo(() => {
-    if (!treeData) return null;
-    
-    // Apply visual filtering to the tree data (show all nodes, dim filtered ones)
-    const visuallyFilteredTreeData = applyVisualFiltering(treeData);
-    
-    // Create D3 hierarchy from our visually filtered data
-    const root = d3.hierarchy(visuallyFilteredTreeData, d => d.children);
-    
-    // Adaptive layout for large datasets
-    const nodeCount = root.descendants().length;
-    const margin = { top: 60, right: 150, bottom: 60, left: 150 };
-    
-    // Scale dimensions based on node count
-    const baseWidth = Math.max(800, dimensions.width - margin.left - margin.right);
-    const baseHeight = Math.max(400, dimensions.height - margin.top - margin.bottom);
-    
-    // Increase spacing for large trees - much more vertical space between levels
-    const width = nodeCount > 100 ? baseWidth * 1.5 : baseWidth;
-    const height = nodeCount > 100 ? Math.max(baseHeight * 3, nodeCount * 15) : Math.max(baseHeight * 2, nodeCount * 12);
-    
-    const treeLayout = d3.tree()
-      .size([height, width])
-      .separation((a, b) => {
-        // Much larger spacing between grandchildren and across different branches
-        const baseSeparation = (a.parent === b.parent ? 3.0 : 5.5);
-        return nodeCount > 100 ? baseSeparation * 1.8 : baseSeparation;
-      });
-    
-    // Apply layout to compute positions
-    const layoutRoot = treeLayout(root);
-    
-    return {
-      nodes: layoutRoot.descendants(),
-      links: layoutRoot.links(),
-      bounds: { width: width + margin.left + margin.right, height: height + margin.top + margin.bottom },
-      margin
-    };
-  }, [treeData, dimensions.width, dimensions.height, applyVisualFiltering]);
-
-  // Control handlers for zoom and pan
-  const handleZoomIn = () => {
-    if (zoomRef.current && svgRef.current) {
-      d3.select(svgRef.current)
-        .transition()
-        .duration(300)
-        .call(zoomRef.current.scaleBy, 1.5);
-    }
-  };
-
-  const handleZoomOut = () => {
-    if (zoomRef.current && svgRef.current) {
-      d3.select(svgRef.current)
-        .transition()
-        .duration(300)
-        .call(zoomRef.current.scaleBy, 1 / 1.5);
-    }
-  };
-
-  const handleResetView = () => {
-    if (zoomRef.current && svgRef.current) {
-      d3.select(svgRef.current)
-        .transition()
-        .duration(500)
-        .call(zoomRef.current.transform, d3.zoomIdentity);
-    }
-    setSelectedNode(null);
-    setHoveredNode(null);
-  };
-
-  // Render a single node with enhanced interactions
+  // Render node
   const renderNode = (d3Node: d3.HierarchyPointNode<TreeNodeData>) => {
     if (!d3TreeLayout) return null;
     
-    const node = d3Node.data; // Original data
+    const node = d3Node.data;
     const isSelected = selectedNode?.name === node.name;
     const isHovered = hoveredNode?.name === node.name;
     const isFiltered = node._isFiltered;
+    const isCustom = node.type === 'custom';
     const { margin } = d3TreeLayout;
     
-    // Get node color and apply dimming if filtered
-    let nodeColor = getNodeColor(node.type, isHovered, isSelected);
-    let textColor = "#374151";
-    let opacity = 1;
+    const nodeStyle = getNodeStyle(node.type, isSelected, isHovered, isFiltered);
+    let textColor = isFiltered ? "#9ca3af" : "#374151";
+    let opacity = isFiltered ? 0.5 : 1;
     
-    if (isFiltered) {
-      nodeColor = "#d1d5db"; // Gray color for filtered nodes
-      textColor = "#9ca3af";
-      opacity = 0.5;
+    // Apply custom table emphasis scaling
+    if (isCustom && !isFiltered) {
+      const emphasisScale = {
+        'subtle': 1.2,
+        'moderate': 1.67,
+        'maximum': 2.0
+      }[customTableEmphasis];
+      
+      nodeStyle.radius = Math.round(nodeStyle.radius * emphasisScale);
     }
     
     return (
-      <g key={node.name} opacity={opacity}>
-        <circle
-          cx={d3Node.y + margin.left}
-          cy={d3Node.x + margin.top}
-          r={isSelected ? 10 : (isHovered ? 9 : 8)}
-          fill={nodeColor}
-          stroke={isSelected ? "#374151" : "#fff"}
-          strokeWidth={isSelected ? 3 : 2}
-          style={{ cursor: 'pointer' }}
-          onClick={() => setSelectedNode(isSelected ? null : node)}
-          onMouseEnter={() => setHoveredNode(node)}
-        />
+      <g key={node.name} opacity={opacity} className={isCustom ? 'custom-table-node' : ''}>
+        {/* Glow effect for custom tables */}
+        {isCustom && !isFiltered && (
+          <circle
+            cx={d3Node.y + margin.left}
+            cy={d3Node.x + margin.top}
+            r={nodeStyle.radius + 4}
+            fill="none"
+            stroke="#f97316"
+            strokeWidth="2"
+            opacity="0.6"
+            style={{
+              filter: 'drop-shadow(0 0 8px #f97316)'
+            }}
+          />
+        )}
+        
+        {/* Main node - diamond shape for custom tables */}
+        {isCustom && !isFiltered ? (
+          <polygon
+            points={`${d3Node.y + margin.left - nodeStyle.radius},${d3Node.x + margin.top} ${d3Node.y + margin.left},${d3Node.x + margin.top - nodeStyle.radius} ${d3Node.y + margin.left + nodeStyle.radius},${d3Node.x + margin.top} ${d3Node.y + margin.left},${d3Node.x + margin.top + nodeStyle.radius}`}
+            fill={nodeStyle.fill}
+            stroke={nodeStyle.stroke}
+            strokeWidth={nodeStyle.strokeWidth}
+            style={{ cursor: 'pointer' }}
+            onClick={() => handleNodeClick(node)}
+            onMouseEnter={() => setHoveredNode(node)}
+          />
+        ) : (
+          <circle
+            cx={d3Node.y + margin.left}
+            cy={d3Node.x + margin.top}
+            r={nodeStyle.radius}
+            fill={nodeStyle.fill}
+            stroke={nodeStyle.stroke}
+            strokeWidth={nodeStyle.strokeWidth}
+            style={{ cursor: 'pointer' }}
+            onClick={() => handleNodeClick(node)}
+            onMouseEnter={() => setHoveredNode(node)}
+          />
+        )}
+        
+        {/* Enhanced label */}
         <text
           x={d3Node.y + margin.left}
-          y={d3Node.x + margin.top - 15}
+          y={d3Node.x + margin.top - (nodeStyle.radius + 5)}
           textAnchor="middle"
-          fontSize="12"
+          fontSize={isCustom ? "13" : "12"}
           fill={textColor}
-          fontWeight={node.type === 'custom' ? 'bold' : 'normal'}
+          fontWeight={isCustom ? 'bold' : 'normal'}
           style={{ pointerEvents: 'none', userSelect: 'none' }}
         >
           {node.label}
         </text>
+        
+        {/* Custom table indicator */}
+        {isCustom && !isFiltered && (
+          <text
+            x={d3Node.y + margin.left + nodeStyle.radius + 5}
+            y={d3Node.x + margin.top - nodeStyle.radius}
+            fontSize="10"
+            fill="#ea580c"
+            fontWeight="bold"
+            style={{ pointerEvents: 'none', userSelect: 'none' }}
+          >
+            ★
+          </text>
+        )}
       </g>
     );
   };
 
-  // Render connection lines with enhanced styling
+  // Get path from node to root for highlighting
+  const getPathToRoot = useCallback((nodeName: string): string[] => {
+    const path: string[] = [];
+    const findPath = (node: TreeNodeData): boolean => {
+      if (node.name === nodeName) {
+        path.push(node.name);
+        return true;
+      }
+      if (node.children) {
+        for (const child of node.children) {
+          if (findPath(child)) {
+            path.push(node.name);
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+    
+    if (treeData) {
+      findPath(treeData);
+    }
+    return path.reverse();
+  }, [treeData]);
+  
+  // Handle node selection with path highlighting
+  const handleNodeClick = useCallback((node: TreeNodeData) => {
+    const wasSelected = selectedNode?.name === node.name;
+    setSelectedNode(wasSelected ? null : node);
+    
+    if (!wasSelected && node.type === 'custom') {
+      // Highlight path to custom table
+      const pathNodes = getPathToRoot(node.name);
+      setHighlightedPaths(new Set(pathNodes));
+    } else {
+      setHighlightedPaths(new Set());
+    }
+  }, [selectedNode, getPathToRoot]);
+
+  // Render link with path highlighting
   const renderLink = (d3Link: d3.HierarchyPointLink<TreeNodeData>) => {
     if (!d3TreeLayout) return null;
     
     const { margin } = d3TreeLayout;
-    
-    // Determine if link should be dimmed (when target node is filtered)
     const isTargetFiltered = d3Link.target.data._isFiltered;
-    const linkOpacity = isTargetFiltered ? 0.3 : 1;
-    const strokeColor = isTargetFiltered ? "#e2e8f0" : "#cbd5e1";
+    const isInHighlightedPath = highlightedPaths.has(d3Link.source.data.name) && highlightedPaths.has(d3Link.target.data.name);
+    
+    let linkOpacity = isTargetFiltered ? 0.3 : 1;
+    let strokeColor = isTargetFiltered ? "#e2e8f0" : "#cbd5e1";
+    let strokeWidth = "2";
+    let className = "";
+    
+    if (isInHighlightedPath && !isTargetFiltered) {
+      strokeColor = "#f97316";
+      strokeWidth = "4";
+      linkOpacity = 1;
+      className = "custom-path-highlight";
+    }
     
     return (
       <path
         key={`${d3Link.source.data.name}-${d3Link.target.data.name}`}
+        className={className}
         d={`M${d3Link.source.y + margin.left},${d3Link.source.x + margin.top}
             C${(d3Link.source.y + d3Link.target.y) / 2 + margin.left},${d3Link.source.x + margin.top}
              ${(d3Link.source.y + d3Link.target.y) / 2 + margin.left},${d3Link.target.x + margin.top}
              ${d3Link.target.y + margin.left},${d3Link.target.x + margin.top}`}
         fill="none"
         stroke={strokeColor}
-        strokeWidth="2"
+        strokeWidth={strokeWidth}
         opacity={linkOpacity}
       />
     );
@@ -436,34 +509,19 @@ export function InheritanceTreeView() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-3">
-              <Skeleton className="h-4 w-3/4" />
-              <Skeleton className="h-4 w-1/2" />
-              <Skeleton className="h-[400px] w-full" />
-            </div>
+            <Skeleton className="h-[400px] w-full" />
           </CardContent>
         </Card>
       </div>
     );
   }
 
-  if (error) {
+  if (error || !treeData || !d3TreeLayout) {
     return (
       <Alert variant="destructive">
         <AlertTriangle className="h-4 w-4" />
         <AlertDescription>
-          Failed to load table hierarchy: {error}
-        </AlertDescription>
-      </Alert>
-    );
-  }
-
-  if (!treeData || !d3TreeLayout) {
-    return (
-      <Alert>
-        <AlertTriangle className="h-4 w-4" />
-        <AlertDescription>
-          No table hierarchy data available.
+          {error || 'No table hierarchy data available.'}
         </AlertDescription>
       </Alert>
     );
@@ -471,7 +529,6 @@ export function InheritanceTreeView() {
 
   return (
     <div className="w-full space-y-4">
-
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Tree Visualization */}
         <div className="lg:col-span-2">
@@ -480,92 +537,58 @@ export function InheritanceTreeView() {
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle className="text-lg">CMDB Table Hierarchy</CardTitle>
-                  {treeData && d3TreeLayout && (
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Root: {treeData.name} | Total Tables: {d3TreeLayout.nodes.length} | Direct Children: {treeData.children?.length || 0}
-                    </p>
-                  )}
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-sm text-muted-foreground font-medium">Tables filter:</span>
-                  <div className="flex gap-2">
-                    <button
-                      disabled
-                      className="px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700 border border-blue-300 cursor-not-allowed opacity-75 flex items-center gap-1"
-                      title="Base tables are always visible to maintain tree structure"
-                    >
-                      <div className="w-2 h-2 rounded-full bg-blue-600"></div>
-                      Base
-                    </button>
-                    <button
-                      onClick={() => setVisibleTableTypes(prev => ({ ...prev, extended: !prev.extended }))}
-                      className={`px-2 py-1 rounded-full text-xs font-medium transition-all duration-200 flex items-center gap-1 ${
-                        visibleTableTypes.extended
-                          ? 'bg-green-100 text-green-700 border border-green-300'
-                          : 'bg-gray-200 text-gray-500 border border-gray-300'
-                      }`}
-                    >
-                      <div className={`w-2 h-2 rounded-full ${
-                        visibleTableTypes.extended ? 'bg-green-600' : 'bg-gray-400'
-                      }`}></div>
-                      Extended
-                    </button>
-                    <button
-                      onClick={() => setVisibleTableTypes(prev => ({ ...prev, custom: !prev.custom }))}
-                      className={`px-2 py-1 rounded-full text-xs font-medium transition-all duration-200 flex items-center gap-1 ${
-                        visibleTableTypes.custom
-                          ? 'bg-orange-100 text-orange-700 border border-orange-300'
-                          : 'bg-gray-200 text-gray-500 border border-gray-300'
-                      }`}
-                    >
-                      <div className={`w-2 h-2 rounded-full ${
-                        visibleTableTypes.custom ? 'bg-orange-600' : 'bg-gray-400'
-                      }`}></div>
-                      Custom
-                    </button>
-                  </div>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Root: {treeData.name} | Tables: {d3TreeLayout.nodes.filter(n => !n.data._isFiltered).length}/{d3TreeLayout.nodes.length}
+                  </p>
                 </div>
               </div>
             </CardHeader>
             <CardContent>
               <div 
                 ref={containerRef}
-                className="w-full border rounded-lg bg-slate-50/50" 
-                style={{ height: d3TreeLayout && d3TreeLayout.nodes.length > 100 ? '800px' : '600px' }}
+                className="w-full border rounded-lg bg-slate-50/50 relative" 
+                style={{ height: '600px' }}
               >
+                {/* Sidebar Controls */}
+                <GraphSidebar
+                  layoutType={layoutType}
+                  onLayoutChange={setLayoutType}
+                  onZoomIn={handleZoomIn}
+                  onZoomOut={handleZoomOut}
+                  onResetView={handleResetView}
+                  visibleTableTypes={visibleTableTypes}
+                  onTableTypeToggle={(type) => {
+                    setVisibleTableTypes(prev => ({
+                      ...prev,
+                      [type]: !prev[type]
+                    }));
+                  }}
+                  customTableEmphasis={customTableEmphasis}
+                  onCustomEmphasisChange={setCustomTableEmphasis}
+                  showCustomOnly={showCustomOnly}
+                  onCustomOnlyToggle={() => setShowCustomOnly(!showCustomOnly)}
+                  customTableCount={d3TreeLayout?.nodes.filter(n => n.data.type === 'custom' && !n.data._isFiltered).length || 0}
+                />
+                
+                {/* Search Overlay */}
+                <GraphSearchOverlay
+                  searchTerm={searchTerm}
+                  onSearchChange={setSearchTerm}
+                  nodeCount={d3TreeLayout.nodes.length}
+                  filteredCount={d3TreeLayout.nodes.filter(n => !n.data._isFiltered).length}
+                />
+
                 <svg
                   ref={svgRef}
                   width="100%"
                   height="100%"
                   viewBox={`0 0 ${d3TreeLayout.bounds.width} ${d3TreeLayout.bounds.height}`}
                   preserveAspectRatio="xMidYMid meet"
-                  className={`${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
-                  onMouseDown={handleMouseDown}
-                  onMouseMove={handleMouseMove}
-                  onMouseUp={handleMouseUp}
-                  onMouseLeave={handleMouseUp}
+                  className="cursor-grab"
                 >
-                  {/* Main group with transform */}
                   <g transform={`translate(${transform.x}, ${transform.y}) scale(${transform.k})`}>
-                    {/* Render connection lines first (behind nodes) */}
                     {d3TreeLayout.links.map(renderLink)}
-                    
-                    {/* Render all nodes */}
                     {d3TreeLayout.nodes.map(renderNode)}
-                  </g>
-                  
-                  {/* Fixed legend (not affected by zoom/pan) */}
-                  <g transform="translate(20, 20)">
-                    <rect x="-10" y="-10" width="140" height="80" fill="rgba(255,255,255,0.9)" stroke="#e2e8f0" rx="4"/>
-                    <text x="0" y="0" fontSize="12" fontWeight="bold" fill="#374151">
-                      Legend:
-                    </text>
-                    <circle cx="8" cy="16" r="5" fill="#3b82f6" />
-                    <text x="20" y="20" fontSize="11" fill="#374151">Base Tables</text>
-                    <circle cx="8" cy="32" r="5" fill={visibleTableTypes.extended ? "#10b981" : "#d1d5db"} />
-                    <text x="20" y="36" fontSize="11" fill={visibleTableTypes.extended ? "#374151" : "#9ca3af"}>Extended Tables</text>
-                    <circle cx="8" cy="48" r="5" fill={visibleTableTypes.custom ? "#ea580c" : "#d1d5db"} />
-                    <text x="20" y="52" fontSize="11" fill={visibleTableTypes.custom ? "#374151" : "#9ca3af"}>Custom Tables</text>
                   </g>
                 </svg>
               </div>
@@ -573,7 +596,7 @@ export function InheritanceTreeView() {
           </Card>
         </div>
 
-        {/* Enhanced Details Panel */}
+        {/* Details Panel - keeping original */}
         <div className="lg:col-span-1">
           <Card className="w-full">
             <CardHeader>
@@ -582,179 +605,81 @@ export function InheritanceTreeView() {
                 {hoveredNode ? 'Table Details' : selectedNode ? 'Selected Table' : 'Hover to Explore'}
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4 max-h-[500px] overflow-y-auto">
+            <CardContent className="space-y-4">
               {(hoveredNode || selectedNode) ? (
                 <div className="space-y-4">
-                  {/* Basic Table Information - Always show immediately */}
-                  {(hoveredNode || selectedNode) && (
-                    <div className="space-y-2">
-                      <h4 className="font-medium flex items-center gap-2">
-                        <Database className="h-4 w-4" />
-                        Table Information
-                      </h4>
-                      <div className="bg-slate-50 p-3 rounded-lg space-y-2">
-                        <div>
-                          <span className="text-xs text-muted-foreground uppercase tracking-wide">System Name</span>
-                          <p className="font-mono text-sm">{(hoveredNode || selectedNode)?.table?.name || (hoveredNode || selectedNode)?.name}</p>
+                  <div className="space-y-2">
+                    <div className={`p-3 rounded-lg space-y-2 ${
+                      (hoveredNode || selectedNode)?.type === 'custom' 
+                        ? 'custom-table-legend' 
+                        : 'bg-slate-50'
+                    }`}>
+                      <div>
+                        <span className="text-xs text-muted-foreground uppercase tracking-wide">System Name</span>
+                        <p className="font-mono text-sm">{(hoveredNode || selectedNode)?.name}</p>
+                      </div>
+                      <div>
+                        <span className="text-xs text-muted-foreground uppercase tracking-wide">Display Label</span>
+                        <p className="text-sm">{(hoveredNode || selectedNode)?.label}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground uppercase tracking-wide">Type</span>
+                        <Badge 
+                          variant="outline" 
+                          className={(hoveredNode || selectedNode)?.type === 'custom' ? 'border-orange-500 text-orange-700' : ''}
+                        >
+                          <div className="flex items-center gap-1">
+                            {(hoveredNode || selectedNode)?.type === 'custom' && (
+                              <span className="custom-table-legend-icon">♦</span>
+                            )}
+                            {(hoveredNode || selectedNode)?.type?.toUpperCase()}
+                          </div>
+                        </Badge>
+                      </div>
+                      
+                      {/* Custom table metrics */}
+                      {(hoveredNode || selectedNode)?.type === 'custom' && (
+                        <div className="border-t pt-2 mt-2">
+                          <div className="text-xs text-orange-700 font-medium mb-1">Custom Table Metrics</div>
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div>
+                              <span className="text-muted-foreground">Custom Fields:</span>
+                              <p className="font-medium">{(hoveredNode || selectedNode)?.customFieldCount || 0}</p>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">Records:</span>
+                              <p className="font-medium">{(hoveredNode || selectedNode)?.recordCount || 'N/A'}</p>
+                            </div>
+                          </div>
                         </div>
-                        <div>
-                          <span className="text-xs text-muted-foreground uppercase tracking-wide">Display Label</span>
-                          <p className="text-sm">{(hoveredNode || selectedNode)?.table?.label || (hoveredNode || selectedNode)?.label}</p>
+                      )}
+                    </div>
+                    
+                    {/* Legend for all table types */}
+                    <div className="bg-slate-50 p-3 rounded-lg">
+                      <div className="text-xs font-medium text-gray-700 mb-2">Legend</div>
+                      <div className="space-y-1 text-xs">
+                        <div className="flex items-center gap-2">
+                          <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+                          <span>Base Tables (Foundation)</span>
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className="text-xs text-muted-foreground uppercase tracking-wide">Type</span>
-                          <Badge 
-                            variant="outline" 
-                            className={
-                              (hoveredNode || selectedNode)?.type === 'base' ? 'bg-blue-50 text-blue-700 border-blue-200' :
-                              (hoveredNode || selectedNode)?.type === 'extended' ? 'bg-green-50 text-green-700 border-green-200' :
-                              'bg-orange-50 text-orange-700 border-orange-200'
-                            }
-                          >
-                            {(hoveredNode || selectedNode)?.type?.toUpperCase() || 'UNKNOWN'}
-                          </Badge>
+                          <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                          <span>Extended Tables (Standard)</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="w-3 h-3 bg-orange-500 transform rotate-45"></div>
+                          <span className="font-semibold">Custom Tables ({d3TreeLayout?.nodes.filter(n => n.data.type === 'custom' && !n.data._isFiltered).length || 0})</span>
                         </div>
                       </div>
                     </div>
-                  )}
-
-                  {/* Additional Details - Show when nodeDetails is available */}
-                  {nodeDetails && (
-                    <div className="space-y-4">
-                      {nodeDetails.table.super_class && (
-                        <div className="space-y-2">
-                          <h4 className="font-medium text-sm">Inheritance</h4>
-                          <div className="bg-blue-50 p-2 rounded text-sm">
-                            <span className="text-muted-foreground">Extends:</span>
-                            <span className="font-mono ml-1">{nodeDetails.table.super_class}</span>
-                          </div>
-                        </div>
-                      )}
-
-                      {nodeDetails.recordCount !== undefined && (
-                        <div className="space-y-2">
-                          <h4 className="font-medium text-sm flex items-center gap-1">
-                            <Users className="h-4 w-4" />
-                            Record Count
-                          </h4>
-                          <div className="bg-green-50 p-2 rounded">
-                            <span className="text-lg font-semibold text-green-700">
-                              {nodeDetails.recordCount.toLocaleString()}
-                            </span>
-                            <span className="text-sm text-muted-foreground ml-1">records</span>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Loading indicator for additional details */}
-                      {loadingDetails && (
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                          Loading additional details...
-                        </div>
-                      )}
-
-                      {!loadingDetails && nodeDetails.childTables.length > 0 && (
-                        <div className="space-y-2">
-                          <h4 className="font-medium text-sm">Child Tables ({nodeDetails.childTables.length})</h4>
-                          <div className="space-y-1 max-h-24 overflow-y-auto">
-                            {nodeDetails.childTables.map(child => (
-                              <div key={child.name} className="text-xs bg-slate-50 p-1 rounded font-mono">
-                                {child.name}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {!loadingDetails && nodeDetails.customFields.length > 0 && (
-                        <div className="space-y-2">
-                          <h4 className="font-medium text-sm">Custom Fields ({nodeDetails.customFields.length})</h4>
-                          <div className="space-y-1 max-h-24 overflow-y-auto">
-                            {nodeDetails.customFields.slice(0, 5).map(field => (
-                              <div key={field.sys_id} className="text-xs bg-orange-50 p-1 rounded">
-                                <span className="font-mono">{field.element}</span>
-                                <span className="text-muted-foreground ml-1">({field.type})</span>
-                              </div>
-                            ))}
-                            {nodeDetails.customFields.length > 5 && (
-                              <div className="text-xs text-muted-foreground">+ {nodeDetails.customFields.length - 5} more...</div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-
-                      {!loadingDetails && nodeDetails.referenceFields.length > 0 && (
-                        <div className="space-y-2">
-                          <h4 className="font-medium text-sm">Reference Fields ({nodeDetails.referenceFields.length})</h4>
-                          <div className="space-y-1 max-h-24 overflow-y-auto">
-                            {nodeDetails.referenceFields.slice(0, 3).map(field => (
-                              <div key={field.sys_id} className="text-xs bg-blue-50 p-1 rounded">
-                                <span className="font-mono">{field.element}</span>
-                                <span className="text-muted-foreground ml-1">→ {field.reference_table}</span>
-                              </div>
-                            ))}
-                            {nodeDetails.referenceFields.length > 3 && (
-                              <div className="text-xs text-muted-foreground">+ {nodeDetails.referenceFields.length - 3} more...</div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-
-                      {nodeDetails.table.sys_created_on && (
-                        <div className="space-y-2">
-                          <h4 className="font-medium text-sm flex items-center gap-1">
-                            <Calendar className="h-4 w-4" />
-                            Timestamps
-                          </h4>
-                          <div className="text-xs text-muted-foreground space-y-1">
-                            <div>Created: {new Date(nodeDetails.table.sys_created_on).toLocaleDateString()}</div>
-                            <div>By: {nodeDetails.table.sys_created_by}</div>
-                            {nodeDetails.table.sys_updated_on && (
-                              <div>Updated: {new Date(nodeDetails.table.sys_updated_on).toLocaleDateString()}</div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {selectedNode && (
-                    <Button 
-                      variant="outline" 
-                      size="sm" 
-                      onClick={() => setSelectedNode(null)}
-                      className="w-full"
-                    >
-                      Clear Selection
-                    </Button>
-                  )}
+                  </div>
                 </div>
               ) : (
                 <div className="space-y-4">
                   <div className="flex items-center gap-2">
                     <CheckCircle className="h-5 w-5 text-green-500" />
                     <span className="text-sm">ServiceNow Integration Active</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div className="bg-slate-100 p-2 rounded">
-                      <div className="font-medium">Tables</div>
-                      <div className="text-muted-foreground">{d3TreeLayout.nodes.length}</div>
-                    </div>
-                    <div className="bg-slate-100 p-2 rounded">
-                      <div className="font-medium">Zoom</div>
-                      <div className="text-muted-foreground">{Math.round(transform.k * 100)}%</div>
-                    </div>
-                  </div>
-                  <div>
-                    <h4 className="font-medium">Features</h4>
-                    <ul className="text-sm text-muted-foreground space-y-1">
-                      <li>• Live ServiceNow data</li>
-                      <li>• Interactive navigation</li>
-                      <li>• Detailed hover information</li>
-                      <li>• Pan and zoom controls</li>
-                      <li>• Custom table detection</li>
-                    </ul>
                   </div>
                   <div className="text-sm text-center text-muted-foreground italic">
                     Hover over any table to see details

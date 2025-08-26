@@ -13,8 +13,13 @@ import {
   Filter,
   Settings,
   Maximize2,
-  Minimize2
+  Minimize2,
+  Network,
+  Sun,
+  Target
 } from 'lucide-react';
+
+export type GraphLayoutType = 'tree' | 'force-directed' | 'sunburst' | 'radial';
 
 export interface GraphControlsProps {
   // Zoom controls
@@ -34,9 +39,17 @@ export interface GraphControlsProps {
   onToggleFullscreen?: () => void;
   isFullscreen?: boolean;
   
+  // Layout controls
+  layoutType?: GraphLayoutType;
+  onLayoutChange?: (layout: GraphLayoutType) => void;
+  
   // Filter settings
   showCustomOnly?: boolean;
   onCustomOnlyToggle?: () => void;
+  showBaseOnly?: boolean;
+  onBaseOnlyToggle?: () => void;
+  showExtendedOnly?: boolean;
+  onExtendedOnlyToggle?: () => void;
   
   // View-specific settings
   viewType?: 'inheritance' | 'references' | 'ci-relationships';
@@ -57,8 +70,14 @@ export function GraphControls({
   onSearchChange,
   onToggleFullscreen,
   isFullscreen = false,
+  layoutType = 'tree',
+  onLayoutChange,
   showCustomOnly = false,
   onCustomOnlyToggle,
+  showBaseOnly = false,
+  onBaseOnlyToggle,
+  showExtendedOnly = false,
+  onExtendedOnlyToggle,
   viewType = 'inheritance',
   nodeCount = 0,
   edgeCount = 0,
@@ -66,6 +85,7 @@ export function GraphControls({
 }: GraphControlsProps) {
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [showFilterMenu, setShowFilterMenu] = useState(false);
+  const [showLayoutMenu, setShowLayoutMenu] = useState(false);
 
   const getViewTypeLabel = () => {
     switch (viewType) {
@@ -116,6 +136,74 @@ export function GraphControls({
               onChange={(e) => onSearchChange?.(e.target.value)}
               className="pl-8"
             />
+          </div>
+        </div>
+
+        {/* Graph Layout Controls */}
+        <div className="space-y-2">
+          <div className="relative">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setShowLayoutMenu(!showLayoutMenu)}
+              className="gap-2 w-full justify-between"
+            >
+              <div className="flex items-center gap-2">
+                {layoutType === 'tree' && <Network className="h-3 w-3" />}
+                {layoutType === 'force-directed' && <Target className="h-3 w-3" />}
+                {layoutType === 'sunburst' && <Sun className="h-3 w-3" />}
+                {layoutType === 'radial' && <Network className="h-3 w-3" />}
+                <span className="text-sm">
+                  {layoutType === 'tree' && 'Tree Layout'}
+                  {layoutType === 'force-directed' && 'Force-Directed'}
+                  {layoutType === 'sunburst' && 'Sunburst'}
+                  {layoutType === 'radial' && 'Radial'}
+                </span>
+              </div>
+              <Settings className="h-3 w-3" />
+            </Button>
+            {showLayoutMenu && (
+              <Card className="absolute top-10 left-0 z-50 w-full shadow-lg">
+                <CardContent className="p-2 space-y-1">
+                  <Button
+                    size="sm"
+                    variant={layoutType === 'tree' ? 'default' : 'ghost'}
+                    onClick={() => { onLayoutChange?.('tree'); setShowLayoutMenu(false); }}
+                    className="w-full justify-start gap-2"
+                  >
+                    <Network className="h-3 w-3" />
+                    Tree Layout
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={layoutType === 'force-directed' ? 'default' : 'ghost'}
+                    onClick={() => { onLayoutChange?.('force-directed'); setShowLayoutMenu(false); }}
+                    className="w-full justify-start gap-2"
+                  >
+                    <Target className="h-3 w-3" />
+                    Force-Directed
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={layoutType === 'sunburst' ? 'default' : 'ghost'}
+                    onClick={() => { onLayoutChange?.('sunburst'); setShowLayoutMenu(false); }}
+                    className="w-full justify-start gap-2"
+                  >
+                    <Sun className="h-3 w-3" />
+                    Sunburst
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={layoutType === 'radial' ? 'default' : 'ghost'}
+                    onClick={() => { onLayoutChange?.('radial'); setShowLayoutMenu(false); }}
+                    className="w-full justify-start gap-2"
+                  >
+                    <Network className="h-3 w-3" />
+                    Radial Layout
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
           </div>
         </div>
 
@@ -189,33 +277,72 @@ export function GraphControls({
             </Button>
             {showFilterMenu && (
               <Card className="absolute top-10 left-0 z-50 w-64 shadow-lg">
-                <CardContent className="p-3 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-sm">Show Custom Only</Label>
-                    <Button
-                      size="sm"
-                      variant={showCustomOnly ? "default" : "outline"}
-                      onClick={onCustomOnlyToggle}
-                      className="h-6 px-2 text-xs"
-                    >
-                      {showCustomOnly ? "ON" : "OFF"}
-                    </Button>
+                <CardContent className="p-3 space-y-3">
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Table Type Filters</Label>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+                          <Label className="text-xs">Base Only</Label>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant={showBaseOnly ? "default" : "outline"}
+                          onClick={onBaseOnlyToggle}
+                          className="h-6 px-2 text-xs"
+                        >
+                          {showBaseOnly ? "ON" : "OFF"}
+                        </Button>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                          <Label className="text-xs">Extended Only</Label>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant={showExtendedOnly ? "default" : "outline"}
+                          onClick={onExtendedOnlyToggle}
+                          className="h-6 px-2 text-xs"
+                        >
+                          {showExtendedOnly ? "ON" : "OFF"}
+                        </Button>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-3 h-3 rounded-full bg-orange-500"></div>
+                          <Label className="text-xs">Custom Only</Label>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant={showCustomOnly ? "default" : "outline"}
+                          onClick={onCustomOnlyToggle}
+                          className="h-6 px-2 text-xs"
+                        >
+                          {showCustomOnly ? "ON" : "OFF"}
+                        </Button>
+                      </div>
+                    </div>
                   </div>
-                  {viewType === 'inheritance' && (
-                    <div className="text-xs text-muted-foreground">
-                      Filter to show only custom tables and their inheritance paths
-                    </div>
-                  )}
-                  {viewType === 'references' && (
-                    <div className="text-xs text-muted-foreground">
-                      Filter to show only references involving custom tables
-                    </div>
-                  )}
-                  {viewType === 'ci-relationships' && (
-                    <div className="text-xs text-muted-foreground">
-                      Filter to show only relationships with custom CI classes
-                    </div>
-                  )}
+                  
+                  <div className="border-t pt-2">
+                    {viewType === 'inheritance' && (
+                      <div className="text-xs text-muted-foreground">
+                        Filters will gray out tables not matching the selected criteria while maintaining tree structure
+                      </div>
+                    )}
+                    {viewType === 'references' && (
+                      <div className="text-xs text-muted-foreground">
+                        Filter to show only references involving selected table types
+                      </div>
+                    )}
+                    {viewType === 'ci-relationships' && (
+                      <div className="text-xs text-muted-foreground">
+                        Filter to show only relationships with selected CI class types
+                      </div>
+                    )}
+                  </div>
                 </CardContent>
               </Card>
             )}
@@ -279,6 +406,7 @@ export function GraphControls({
   const handleClickOutside = () => {
     setShowExportMenu(false);
     setShowFilterMenu(false);
+    setShowLayoutMenu(false);
   };
 
   // Add event listener for clicks outside (in a real implementation)

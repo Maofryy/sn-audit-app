@@ -6,6 +6,7 @@ import { GraphVisualizationDashboard } from './components/GraphVisualizationDash
 import { Loader2, AlertCircle, Wifi } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card';
 import { Button } from './components/ui/button';
+import './styles/custom-tables.css';
 
 function AppContent() {
   const { state, testConnection } = useConnection();
