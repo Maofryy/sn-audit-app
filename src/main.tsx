@@ -1,5 +1,8 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
+import { GraphProvider } from './contexts/GraphContext'
 import './index.css'
 import App from './App.tsx'
 
@@ -11,8 +14,25 @@ if (import.meta.env.DEV) {
   });
 }
 
+// Create a client
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 1000 * 60 * 5, // 5 minutes
+      cacheTime: 1000 * 60 * 15, // 15 minutes
+      refetchOnWindowFocus: false,
+      retry: 2,
+    },
+  },
+})
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <QueryClientProvider client={queryClient}>
+      <GraphProvider>
+        <App />
+        {import.meta.env.DEV && <ReactQueryDevtools initialIsOpen={false} />}
+      </GraphProvider>
+    </QueryClientProvider>
   </StrictMode>,
 )

@@ -8,7 +8,11 @@ import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { CheckCircle, XCircle, Loader2, Wifi, Settings, Info } from 'lucide-react';
 
-export function ConnectionTest() {
+interface ConnectionTestProps {
+  onConnectionChange?: (connected: boolean) => void;
+}
+
+export function ConnectionTest({ onConnectionChange }: ConnectionTestProps) {
   const [status, setStatus] = useState<ConnectionStatus>({
     connected: false,
     testing: false
@@ -33,6 +37,7 @@ export function ConnectionTest() {
   const testConnection = async () => {
     setStatus({ connected: false, testing: true });
     setTestResult(null);
+    onConnectionChange?.(false);
 
     try {
       const result = await serviceNowService.testConnection();
@@ -43,6 +48,7 @@ export function ConnectionTest() {
         error: result.error,
         lastTested: new Date()
       });
+      onConnectionChange?.(result.success);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
       setTestResult({ success: false, error: errorMessage });
@@ -52,6 +58,7 @@ export function ConnectionTest() {
         error: errorMessage,
         lastTested: new Date()
       });
+      onConnectionChange?.(false);
     }
   };
 
