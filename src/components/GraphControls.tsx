@@ -19,7 +19,7 @@ import {
   Target
 } from 'lucide-react';
 
-export type GraphLayoutType = 'tree' | 'force-directed' | 'sunburst' | 'radial';
+export type GraphLayoutType = 'tree' | 'force-directed' | 'sunburst';
 
 export interface GraphControlsProps {
   // Zoom controls
@@ -152,12 +152,10 @@ export function GraphControls({
                 {layoutType === 'tree' && <Network className="h-3 w-3" />}
                 {layoutType === 'force-directed' && <Target className="h-3 w-3" />}
                 {layoutType === 'sunburst' && <Sun className="h-3 w-3" />}
-                {layoutType === 'radial' && <Network className="h-3 w-3" />}
                 <span className="text-sm">
                   {layoutType === 'tree' && 'Tree Layout'}
                   {layoutType === 'force-directed' && 'Force-Directed'}
                   {layoutType === 'sunburst' && 'Sunburst'}
-                  {layoutType === 'radial' && 'Radial'}
                 </span>
               </div>
               <Settings className="h-3 w-3" />
@@ -191,15 +189,6 @@ export function GraphControls({
                   >
                     <Sun className="h-3 w-3" />
                     Sunburst
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant={layoutType === 'radial' ? 'default' : 'ghost'}
-                    onClick={() => { onLayoutChange?.('radial'); setShowLayoutMenu(false); }}
-                    className="w-full justify-start gap-2"
-                  >
-                    <Network className="h-3 w-3" />
-                    Radial Layout
                   </Button>
                 </CardContent>
               </Card>

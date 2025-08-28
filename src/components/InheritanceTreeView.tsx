@@ -16,18 +16,7 @@ import { PerformanceMonitor } from '@/utils/performanceMonitor';
 import { serviceNowService } from '@/services/serviceNowService';
 import { useCMDBData } from '@/contexts/CMDBDataContext';
 import { TableMetadata, FieldMetadata } from '@/types';
-
-interface TreeNodeData {
-  name: string;
-  label: string;
-  type: 'base' | 'extended' | 'custom';
-  table?: TableMetadata;
-  children?: TreeNodeData[];
-  customFieldCount?: number;
-  recordCount?: number;
-  relationships?: FieldMetadata[];
-  _isFiltered?: boolean;
-}
+import { TreeLayoutFactory, TreeNodeData } from '@/utils/treeLayoutAlgorithms';
 
 interface NodeDetails {
   table: TableMetadata;
@@ -74,6 +63,8 @@ export function InheritanceTreeView() {
   const [virtualizedLinks, setVirtualizedLinks] = useState<any[]>([]);
   const { measurePerformance } = useVirtualizedPerformance();
   const performanceMonitor = useRef(new PerformanceMonitor());
+  
+  // Radial layout removed - settings no longer needed
   
   // Refs for DOM access
   const containerRef = useRef<HTMLDivElement>(null);
@@ -168,83 +159,15 @@ export function InheritanceTreeView() {
     };
   }, [visibleTableTypes, searchTerm, showCustomOnly]);
 
-  // Enhanced tree layout with full canvas utilization
-  const d3TreeLayout = useMemo(() => {
+  // Enhanced tree layout using modular layout algorithms
+  const layoutResult = useMemo(() => {
     if (!treeData) return null;
     
     const visuallyFilteredTreeData = applyVisualFiltering(treeData);
-    const root = d3.hierarchy(visuallyFilteredTreeData, d => d.children);
+    const layout = TreeLayoutFactory.getLayout(layoutType);
     
-    const nodeCount = root.descendants().length;
-    const margin = { top: 40, right: 40, bottom: 40, left: 40 };
-    
-    // Use full available canvas dimensions
-    const availableWidth = dimensions.width - margin.left - margin.right;
-    const availableHeight = dimensions.height - margin.top - margin.bottom;
-    
-    // Calculate optimal layout dimensions based on tree structure
-    const depth = Math.max(...root.descendants().map(d => d.depth));
-    const maxNodesAtLevel = Math.max(...Array.from({length: depth + 1}, (_, i) => 
-      root.descendants().filter(d => d.depth === i).length
-    ));
-    
-    // Dynamic sizing that utilizes full canvas
-    let layoutWidth = Math.max(availableWidth, depth * 200); // Minimum spacing between levels
-    let layoutHeight = Math.max(availableHeight, maxNodesAtLevel * 50); // Minimum spacing between siblings
-    
-    // Performance-based adjustments
-    const isHighPerformance = nodeCount > 500;
-    const isUltraHighPerformance = nodeCount > 1000;
-    
-    if (isUltraHighPerformance) {
-      layoutWidth = Math.max(layoutWidth, availableWidth * 1.2);
-      layoutHeight = Math.max(layoutHeight, availableHeight * 1.5);
-    } else if (isHighPerformance) {
-      layoutWidth = Math.max(layoutWidth, availableWidth * 1.1);
-      layoutHeight = Math.max(layoutHeight, availableHeight * 1.3);
-    }
-    
-    // Use horizontal layout (width and height swapped for d3.tree)
-    const treeLayout = d3.tree()
-      .size([layoutHeight, layoutWidth])
-      .separation((a, b) => {
-        // Adjust separation based on tree density
-        const baseSeparation = 1.0;
-        const densityFactor = Math.min(2.0, Math.max(0.5, 50 / maxNodesAtLevel));
-        
-        if (a.parent === b.parent) {
-          return baseSeparation * densityFactor;
-        }
-        return baseSeparation * densityFactor * 1.5;
-      });
-    
-    const layoutRoot = treeLayout(root);
-    
-    // Calculate actual bounds used by the layout
-    const allNodes = layoutRoot.descendants();
-    const minX = Math.min(...allNodes.map(d => d.x));
-    const maxX = Math.max(...allNodes.map(d => d.x));
-    const minY = Math.min(...allNodes.map(d => d.y));
-    const maxY = Math.max(...allNodes.map(d => d.y));
-    
-    const actualWidth = maxY - minY + 100; // Add padding
-    const actualHeight = maxX - minX + 100;
-    
-    return {
-      nodes: layoutRoot.descendants(),
-      links: layoutRoot.links(),
-      bounds: { 
-        width: Math.max(actualWidth, availableWidth) + margin.left + margin.right, 
-        height: Math.max(actualHeight, availableHeight) + margin.top + margin.bottom 
-      },
-      margin,
-      nodeCount,
-      isHighPerformance,
-      isUltraHighPerformance,
-      layoutWidth: actualWidth,
-      layoutHeight: actualHeight
-    };
-  }, [treeData, dimensions.width, dimensions.height, applyVisualFiltering, performanceMode]);
+    return layout.calculate(visuallyFilteredTreeData, dimensions, performanceMode);
+  }, [treeData, dimensions, layoutType, applyVisualFiltering, performanceMode]);
 
   // Control handlers
   const handleZoomIn = () => {
@@ -266,16 +189,19 @@ export function InheritanceTreeView() {
   };
 
   const handleResetView = () => {
-    if (zoomRef.current && svgRef.current && d3TreeLayout) {
-      // Calculate centered initial transform
-      const initialScale = Math.min(
-        dimensions.width / d3TreeLayout.bounds.width,
-        dimensions.height / d3TreeLayout.bounds.height,
+    if (zoomRef.current && svgRef.current && layoutResult) {
+      // Calculate centered initial transform - smaller scale for massive graphs
+      let initialScale = Math.min(
+        dimensions.width / layoutResult.bounds.width,
+        dimensions.height / layoutResult.bounds.height,
         1
-      ) * 0.9;
+      );
       
-      const centerX = (dimensions.width - d3TreeLayout.bounds.width * initialScale) / 2;
-      const centerY = (dimensions.height - d3TreeLayout.bounds.height * initialScale) / 2;
+      // Standard initial scale
+      initialScale = initialScale * 0.9;
+      
+      const centerX = (dimensions.width - layoutResult.bounds.width * initialScale) / 2;
+      const centerY = (dimensions.height - layoutResult.bounds.height * initialScale) / 2;
       
       const resetTransform = d3.zoomIdentity
         .translate(centerX, centerY)
@@ -293,12 +219,12 @@ export function InheritanceTreeView() {
 
   // Setup D3 zoom behavior with proper initial positioning
   useEffect(() => {
-    if (!svgRef.current || !treeData || !d3TreeLayout) return;
+    if (!svgRef.current || !treeData || !layoutResult) return;
 
     const svg = d3.select(svgRef.current);
     
     const zoom = d3.zoom<SVGSVGElement, unknown>()
-      .scaleExtent([0.1, 10])
+      .scaleExtent([0.1, 10]) // Standard zoom range
       .on('zoom', (event) => {
         setTransform({
           x: event.transform.x,
@@ -310,15 +236,18 @@ export function InheritanceTreeView() {
     svg.call(zoom);
     zoomRef.current = zoom;
     
-    // Center the graph initially
-    const initialScale = Math.min(
-      dimensions.width / d3TreeLayout.bounds.width,
-      dimensions.height / d3TreeLayout.bounds.height,
+    // Center the graph initially with appropriate scale for massive graphs
+    let initialScale = Math.min(
+      dimensions.width / layoutResult.bounds.width,
+      dimensions.height / layoutResult.bounds.height,
       1
-    ) * 0.9; // 90% to add some padding
+    );
     
-    const centerX = (dimensions.width - d3TreeLayout.bounds.width * initialScale) / 2;
-    const centerY = (dimensions.height - d3TreeLayout.bounds.height * initialScale) / 2;
+    // Standard initial scale with padding
+    initialScale = initialScale * 0.9; // 90% to add some padding
+    
+    const centerX = (dimensions.width - layoutResult.bounds.width * initialScale) / 2;
+    const centerY = (dimensions.height - layoutResult.bounds.height * initialScale) / 2;
     
     const initialTransform = d3.zoomIdentity
       .translate(centerX, centerY)
@@ -329,7 +258,7 @@ export function InheritanceTreeView() {
     return () => {
       svg.on('.zoom', null);
     };
-  }, [treeData, d3TreeLayout, dimensions]);
+  }, [treeData, layoutResult, dimensions]);
 
   // Resize handler
   useEffect(() => {
@@ -362,26 +291,31 @@ export function InheritanceTreeView() {
     };
   }, []);
 
+
   // Enhanced node styling with orange custom table emphasis and LOD
   const getNodeStyle = (nodeType: string, isSelected: boolean, isHovered: boolean, isFiltered: boolean, lodLevel: 'full' | 'simplified' | 'minimal' = 'full') => {
+    // Base styles - standard sizing
+    const baseRadius = 6;
+    const baseStrokeWidth = 2;
+    
     const styles = {
       base: {
         fill: '#1e40af',
         stroke: '#1e293b',
-        radius: 6,
-        strokeWidth: 2
+        radius: baseRadius,
+        strokeWidth: baseStrokeWidth
       },
       extended: {
         fill: '#059669',
         stroke: '#1e293b', 
-        radius: 7,
-        strokeWidth: 2
+        radius: baseRadius + 1,
+        strokeWidth: baseStrokeWidth
       },
       custom: {
         fill: '#ea580c',
         stroke: '#9a3412',
-        radius: 10,
-        strokeWidth: 3
+        radius: baseRadius + 4,
+        strokeWidth: baseStrokeWidth + 1
       }
     };
 
@@ -391,14 +325,23 @@ export function InheritanceTreeView() {
     if (lodLevel === 'simplified') {
       style = {
         ...style,
-        radius: style.radius * 0.8,
+        radius: Math.max(4, style.radius * 0.8),
         strokeWidth: Math.max(1, style.strokeWidth - 1)
       };
     } else if (lodLevel === 'minimal') {
       style = {
         ...style,
-        radius: style.radius * 0.6,
+        radius: Math.max(3, style.radius * 0.6),
         strokeWidth: 1
+      };
+    }
+    
+    // Performance mode adjustments
+    if (layoutResult?.isHighPerformance) {
+      style = {
+        ...style,
+        radius: Math.max(3, style.radius * 0.8),
+        strokeWidth: Math.max(1, style.strokeWidth)
       };
     }
     
@@ -434,9 +377,9 @@ export function InheritanceTreeView() {
   
   // Auto-detect performance mode based on node count
   useEffect(() => {
-    if (!d3TreeLayout) return;
+    if (!layoutResult) return;
     
-    const nodeCount = d3TreeLayout.nodeCount || 0;
+    const nodeCount = layoutResult.nodeCount || 0;
     if (performanceMode === 'auto') {
       if (nodeCount > 1000) {
         setPerformanceMode('maximum');
@@ -444,26 +387,27 @@ export function InheritanceTreeView() {
         setPerformanceMode('high');
       }
     }
-  }, [d3TreeLayout, performanceMode]);
+  }, [layoutResult, performanceMode]);
 
   // Render node with LOD and virtualization support
   const renderNode = (d3Node: d3.HierarchyPointNode<TreeNodeData>, lodLevel: 'full' | 'simplified' | 'minimal' = 'full') => {
-    if (!d3TreeLayout) return null;
+    if (!layoutResult) return null;
     
     const node = d3Node.data;
     const isSelected = selectedNode?.name === node.name;
     const isHovered = hoveredNode?.name === node.name;
     const isFiltered = node._isFiltered;
     const isCustom = node.type === 'custom';
-    const { margin } = d3TreeLayout;
+    const { margin } = layoutResult;
+    const nodeDepth = d3Node.depth;
     
     // Performance measurements
     const perf = measurePerformance();
     performanceMonitor.current.startRender();
     
     const nodeStyle = getNodeStyle(node.type, isSelected, isHovered, isFiltered, lodLevel);
-    let textColor = isFiltered ? "#9ca3af" : "#374151";
-    let opacity = isFiltered ? 0.5 : 1;
+    const textColor = isFiltered ? "#9ca3af" : "#374151";
+    const opacity = isFiltered ? 0.5 : 1;
     
     // Apply custom table emphasis scaling
     if (isCustom && !isFiltered) {
@@ -481,13 +425,21 @@ export function InheritanceTreeView() {
     const shouldShowGlow = lodLevel === 'full' && isCustom && !isFiltered;
     const shouldShowIndicator = lodLevel !== 'minimal' && isCustom && !isFiltered;
     
+    // Standard tree layout positioning
+    const nodeX = d3Node.y + margin.left;
+    const nodeY = d3Node.x + margin.top;
+    const labelX = nodeX;
+    const labelY = nodeY - (nodeStyle.radius + 5);
+    const indicatorX = nodeX + nodeStyle.radius + 5;
+    const indicatorY = nodeY - nodeStyle.radius;
+
     return (
       <g key={node.name} opacity={opacity} className={isCustom ? 'custom-table-node' : ''}>
         {/* Glow effect for custom tables */}
         {isCustom && !isFiltered && (
           <circle
-            cx={d3Node.y + margin.left}
-            cy={d3Node.x + margin.top}
+            cx={nodeX}
+            cy={nodeY}
             r={nodeStyle.radius + 4}
             fill="none"
             stroke="#f97316"
@@ -502,7 +454,7 @@ export function InheritanceTreeView() {
         {/* Main node - diamond shape for custom tables */}
         {isCustom && !isFiltered ? (
           <polygon
-            points={`${d3Node.y + margin.left - nodeStyle.radius},${d3Node.x + margin.top} ${d3Node.y + margin.left},${d3Node.x + margin.top - nodeStyle.radius} ${d3Node.y + margin.left + nodeStyle.radius},${d3Node.x + margin.top} ${d3Node.y + margin.left},${d3Node.x + margin.top + nodeStyle.radius}`}
+            points={`${nodeX - nodeStyle.radius},${nodeY} ${nodeX},${nodeY - nodeStyle.radius} ${nodeX + nodeStyle.radius},${nodeY} ${nodeX},${nodeY + nodeStyle.radius}`}
             fill={nodeStyle.fill}
             stroke={nodeStyle.stroke}
             strokeWidth={nodeStyle.strokeWidth}
@@ -512,8 +464,8 @@ export function InheritanceTreeView() {
           />
         ) : (
           <circle
-            cx={d3Node.y + margin.left}
-            cy={d3Node.x + margin.top}
+            cx={nodeX}
+            cy={nodeY}
             r={nodeStyle.radius}
             fill={nodeStyle.fill}
             stroke={nodeStyle.stroke}
@@ -524,15 +476,18 @@ export function InheritanceTreeView() {
           />
         )}
         
-        {/* Enhanced label */}
+        {/* Standard text labels */}
         <text
-          x={d3Node.y + margin.left}
-          y={d3Node.x + margin.top - (nodeStyle.radius + 5)}
+          x={labelX}
+          y={labelY}
           textAnchor="middle"
           fontSize={isCustom ? "13" : "12"}
           fill={textColor}
           fontWeight={isCustom ? 'bold' : 'normal'}
-          style={{ pointerEvents: 'none', userSelect: 'none' }}
+          style={{ 
+            pointerEvents: 'none', 
+            userSelect: 'none'
+          }}
         >
           {node.label}
         </text>
@@ -540,8 +495,8 @@ export function InheritanceTreeView() {
         {/* Custom table indicator */}
         {isCustom && !isFiltered && (
           <text
-            x={d3Node.y + margin.left + nodeStyle.radius + 5}
-            y={d3Node.x + margin.top - nodeStyle.radius}
+            x={indicatorX}
+            y={indicatorY}
             fontSize="10"
             fill="#ea580c"
             fontWeight="bold"
@@ -593,11 +548,11 @@ export function InheritanceTreeView() {
     }
   }, [selectedNode, getPathToRoot]);
 
-  // Render link with path highlighting
+  // Render link with path highlighting - adaptive for different layout types
   const renderLink = (d3Link: d3.HierarchyPointLink<TreeNodeData>) => {
-    if (!d3TreeLayout) return null;
+    if (!layoutResult) return null;
     
-    const { margin } = d3TreeLayout;
+    const { margin } = layoutResult;
     const isTargetFiltered = d3Link.target.data._isFiltered;
     const isInHighlightedPath = highlightedPaths.has(d3Link.source.data.name) && highlightedPaths.has(d3Link.target.data.name);
     
@@ -612,15 +567,18 @@ export function InheritanceTreeView() {
       linkOpacity = 1;
       className = "custom-path-highlight";
     }
+
+    // Standard tree layout curved paths
+    const pathD = `M${d3Link.source.y + margin.left},${d3Link.source.x + margin.top}
+                   C${(d3Link.source.y + d3Link.target.y) / 2 + margin.left},${d3Link.source.x + margin.top}
+                    ${(d3Link.source.y + d3Link.target.y) / 2 + margin.left},${d3Link.target.x + margin.top}
+                    ${d3Link.target.y + margin.left},${d3Link.target.x + margin.top}`;
     
     return (
       <path
         key={`${d3Link.source.data.name}-${d3Link.target.data.name}`}
         className={className}
-        d={`M${d3Link.source.y + margin.left},${d3Link.source.x + margin.top}
-            C${(d3Link.source.y + d3Link.target.y) / 2 + margin.left},${d3Link.source.x + margin.top}
-             ${(d3Link.source.y + d3Link.target.y) / 2 + margin.left},${d3Link.target.x + margin.top}
-             ${d3Link.target.y + margin.left},${d3Link.target.x + margin.top}`}
+        d={pathD}
         fill="none"
         stroke={strokeColor}
         strokeWidth={strokeWidth}
@@ -647,7 +605,7 @@ export function InheritanceTreeView() {
     );
   }
 
-  if (error || !treeData || !d3TreeLayout) {
+  if (error || !treeData || !layoutResult) {
     return (
       <Alert variant="destructive">
         <AlertTriangle className="h-4 w-4" />
@@ -669,8 +627,8 @@ export function InheritanceTreeView() {
                 <div>
                   <CardTitle className="text-lg">CMDB Table Hierarchy</CardTitle>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Root: {treeData.name} | Tables: {d3TreeLayout.nodes.filter(n => !n.data._isFiltered).length}/{d3TreeLayout.nodes.length}
-            {d3TreeLayout.isHighPerformance && (
+                    Root: {treeData.name} | Tables: {layoutResult.nodes.filter(n => !n.data._isFiltered).length}/{layoutResult.nodes.length}
+            {layoutResult.isHighPerformance && (
               <span className="ml-2 px-2 py-1 bg-orange-100 text-orange-700 text-xs rounded-full font-medium">
                 ⚡ Performance Mode
               </span>
@@ -687,8 +645,6 @@ export function InheritanceTreeView() {
               >
                 {/* Sidebar Overlay Controls - positioned over D3.js canvas */}
                 <GraphSidebarOverlay
-                  layoutType={layoutType}
-                  onLayoutChange={setLayoutType}
                   onZoomIn={handleZoomIn}
                   onZoomOut={handleZoomOut}
                   onResetView={handleResetView}
@@ -701,15 +657,15 @@ export function InheritanceTreeView() {
                   }}
                   showCustomOnly={showCustomOnly}
                   onCustomOnlyToggle={() => setShowCustomOnly(!showCustomOnly)}
-                  customTableCount={d3TreeLayout?.nodes.filter(n => n.data.type === 'custom' && !n.data._isFiltered).length || 0}
+                  customTableCount={layoutResult?.nodes.filter(n => n.data.type === 'custom' && !n.data._isFiltered).length || 0}
                 />
                 
                 {/* Search Overlay */}
                 <GraphSearchOverlay
                   searchTerm={searchTerm}
                   onSearchChange={setSearchTerm}
-                  nodeCount={d3TreeLayout.nodes.length}
-                  filteredCount={d3TreeLayout.nodes.filter(n => !n.data._isFiltered).length}
+                  nodeCount={layoutResult.nodes.length}
+                  filteredCount={layoutResult.nodes.filter(n => !n.data._isFiltered).length}
                 />
                 
                 {/* Hierarchy Mini-Map */}
@@ -718,16 +674,18 @@ export function InheritanceTreeView() {
                   selectedNode={selectedNode}
                   onNodeClick={handleNodeClick}
                   transform={transform}
-                  bounds={d3TreeLayout.bounds}
+                  bounds={layoutResult.bounds}
+                  canvasDimensions={dimensions}
+                  layoutType={layoutType}
                 />
 
                 {/* Virtualized Renderer for Performance */}
-                {d3TreeLayout.isHighPerformance && (
+                {layoutResult.isHighPerformance && (
                   <VirtualizedRenderer
-                    nodes={d3TreeLayout.nodes}
-                    links={d3TreeLayout.links}
+                    nodes={layoutResult.nodes}
+                    links={layoutResult.links}
                     transform={transform}
-                    bounds={d3TreeLayout.bounds}
+                    bounds={layoutResult.bounds}
                     customTableEmphasis={customTableEmphasis}
                     onRender={handleVirtualizedRender}
                   />
@@ -742,7 +700,7 @@ export function InheritanceTreeView() {
                 >
                   <g transform={`translate(${transform.x}, ${transform.y}) scale(${transform.k})`}>
                     {/* Performance-optimized rendering */}
-                    {d3TreeLayout.isHighPerformance ? (
+                    {layoutResult.isHighPerformance ? (
                       // Virtualized rendering for high node counts
                       <>
                         {virtualizedLinks.map(link => renderLink(link.originalLink))}
@@ -754,8 +712,8 @@ export function InheritanceTreeView() {
                     ) : (
                       // Standard rendering for normal node counts
                       <>
-                        {d3TreeLayout.links.map(renderLink)}
-                        {d3TreeLayout.nodes.map(node => renderNode(node))}
+                        {layoutResult.links.map(renderLink)}
+                        {layoutResult.nodes.map(node => renderNode(node))}
                       </>
                     )}
                   </g>
@@ -838,7 +796,7 @@ export function InheritanceTreeView() {
                         </div>
                         <div className="flex items-center gap-2">
                           <div className="w-3 h-3 bg-orange-500 transform rotate-45"></div>
-                          <span className="font-semibold">Custom Tables ({d3TreeLayout?.nodes.filter(n => n.data.type === 'custom' && !n.data._isFiltered).length || 0})</span>
+                          <span className="font-semibold">Custom Tables ({layoutResult?.nodes.filter(n => n.data.type === 'custom' && !n.data._isFiltered).length || 0})</span>
                         </div>
                       </div>
                     </div>
@@ -870,7 +828,7 @@ export function InheritanceTreeView() {
               [type]: !prev[type]
             }));
           }}
-          customTableCount={d3TreeLayout?.nodes.filter(n => n.data.type === 'custom' && !n.data._isFiltered).length || 0}
+          customTableCount={layoutResult?.nodes.filter(n => n.data.type === 'custom' && !n.data._isFiltered).length || 0}
           showCustomOnly={showCustomOnly}
           onCustomOnlyToggle={() => setShowCustomOnly(!showCustomOnly)}
         />

@@ -20,6 +20,8 @@ interface HierarchyMiniMapProps {
   onNodeClick: (node: TreeNodeData) => void;
   transform: { x: number; y: number; k: number };
   bounds: { width: number; height: number };
+  canvasDimensions: { width: number; height: number };
+  layoutType?: 'tree' | 'radial' | 'force-directed' | 'sunburst';
   className?: string;
   defaultVisible?: boolean;
 }
@@ -30,6 +32,8 @@ export function HierarchyMiniMap({
   onNodeClick,
   transform,
   bounds,
+  canvasDimensions,
+  layoutType = 'tree',
   className = '',
   defaultVisible = true
 }: HierarchyMiniMapProps) {
@@ -37,26 +41,62 @@ export function HierarchyMiniMap({
   const [isVisible, setIsVisible] = useState(defaultVisible);
   const miniMapSize = { width: 200, height: 150 };
   
-  // Create mini-map layout
+  // Create mini-map layout - adaptive to main layout type
   const miniMapLayout = useMemo(() => {
     if (!treeData) return null;
     
     const root = d3.hierarchy(treeData, d => d.children);
     const nodeCount = root.descendants().length;
     
-    // Compact layout for mini-map
-    const treeLayout = d3.tree()
-      .size([miniMapSize.height - 20, miniMapSize.width - 20])
-      .separation((a, b) => (a.parent === b.parent ? 1 : 1.5));
-    
-    const layoutRoot = treeLayout(root);
-    
-    return {
-      nodes: layoutRoot.descendants(),
-      links: layoutRoot.links(),
-      nodeCount
-    };
-  }, [treeData, miniMapSize]);
+    if (layoutType === 'radial') {
+      // Radial mini-map layout
+      const radius = Math.min(miniMapSize.width, miniMapSize.height) / 2 - 15;
+      const treeLayout = d3.tree()
+        .size([2 * Math.PI, radius])
+        .separation((a, b) => {
+          const level = a.depth;
+          const nodesAtLevel = root.descendants().filter(d => d.depth === level).length;
+          const circumference = 2 * Math.PI * (level * (radius / (root.height || 1)) || 1);
+          const minSpacing = Math.max(0.3, circumference / (nodesAtLevel * 2));
+          return a.parent === b.parent ? minSpacing : minSpacing * 1.2;
+        });
+
+      const layoutRoot = treeLayout(root);
+      
+      // Transform to cartesian coordinates for minimap
+      const centerX = miniMapSize.width / 2;
+      const centerY = miniMapSize.height / 2;
+      
+      const nodes = layoutRoot.descendants().map(d => {
+        const angle = d.x;
+        const radius = d.y;
+        const x = centerX + radius * Math.cos(angle - Math.PI / 2);
+        const y = centerY + radius * Math.sin(angle - Math.PI / 2);
+        return Object.assign(d, { x: x - centerX + miniMapSize.width/2 - 10, y: y - centerY + miniMapSize.height/2 - 10 });
+      });
+
+      const links = layoutRoot.links().map(d => ({
+        ...d,
+        source: nodes.find(n => n === d.source),
+        target: nodes.find(n => n === d.target)
+      }));
+
+      return { nodes, links, nodeCount };
+    } else {
+      // Tree layout for minimap (default)
+      const treeLayout = d3.tree()
+        .size([miniMapSize.height - 20, miniMapSize.width - 20])
+        .separation((a, b) => (a.parent === b.parent ? 1 : 1.5));
+      
+      const layoutRoot = treeLayout(root);
+      
+      return {
+        nodes: layoutRoot.descendants(),
+        links: layoutRoot.links(),
+        nodeCount
+      };
+    }
+  }, [treeData, miniMapSize, layoutType]);
 
   // Custom table density calculation for heat-map
   const customTableDensity = useMemo(() => {
@@ -68,8 +108,8 @@ export function HierarchyMiniMap({
     // Create density areas around custom tables
     customNodes.forEach(node => {
       const radius = 30; // Heat-map radius
-      const x = node.y + 10;
-      const y = node.x + 10;
+      const x = layoutType === 'radial' ? node.x + 10 : node.y + 10;
+      const y = layoutType === 'radial' ? node.y + 10 : node.x + 10;
       
       for (let i = 0; i < miniMapSize.width; i += 5) {
         for (let j = 0; j < miniMapSize.height; j += 5) {
@@ -86,18 +126,38 @@ export function HierarchyMiniMap({
     return densityMap;
   }, [miniMapLayout, miniMapSize]);
 
-  // Calculate viewport indicator
+  // Calculate viewport indicator with proper coordinate mapping
   const viewportIndicator = useMemo(() => {
-    if (!bounds.width || !bounds.height) return null;
+    if (!bounds.width || !bounds.height || !canvasDimensions.width || !canvasDimensions.height) return null;
     
-    const scaleX = miniMapSize.width / bounds.width;
-    const scaleY = miniMapSize.height / bounds.height;
+    // Account for minimap padding (10px on each side)
+    const miniMapContentWidth = miniMapSize.width - 20;
+    const miniMapContentHeight = miniMapSize.height - 20;
     
-    const viewportWidth = Math.min(miniMapSize.width, bounds.width * scaleX / transform.k);
-    const viewportHeight = Math.min(miniMapSize.height, bounds.height * scaleY / transform.k);
+    // Calculate scale ratios between minimap content area and actual layout bounds
+    const scaleX = miniMapContentWidth / bounds.width;
+    const scaleY = miniMapContentHeight / bounds.height;
     
-    const viewportX = Math.max(0, Math.min(miniMapSize.width - viewportWidth, -transform.x * scaleX / transform.k));
-    const viewportY = Math.max(0, Math.min(miniMapSize.height - viewportHeight, -transform.y * scaleY / transform.k));
+    // Calculate viewport size based on actual canvas dimensions and zoom level
+    const viewportWidth = Math.min(miniMapContentWidth, (canvasDimensions.width / transform.k) * scaleX);
+    const viewportHeight = Math.min(miniMapContentHeight, (canvasDimensions.height / transform.k) * scaleY);
+    
+    // Calculate the visible area in the main canvas (in layout coordinates)
+    const visibleLeft = -transform.x / transform.k;
+    const visibleTop = -transform.y / transform.k;
+    const visibleRight = visibleLeft + canvasDimensions.width / transform.k;
+    const visibleBottom = visibleTop + canvasDimensions.height / transform.k;
+    
+    // Map visible area to minimap coordinates
+    // The bounds represent the total layout space, minimap shows this scaled down
+    const viewportX = Math.max(10, Math.min(
+      miniMapSize.width - 10 - viewportWidth,
+      10 + (visibleLeft * scaleX)
+    ));
+    const viewportY = Math.max(10, Math.min(
+      miniMapSize.height - 10 - viewportHeight,
+      10 + (visibleTop * scaleY)
+    ));
     
     return {
       x: viewportX,
@@ -105,7 +165,7 @@ export function HierarchyMiniMap({
       width: viewportWidth,
       height: viewportHeight
     };
-  }, [transform, bounds, miniMapSize]);
+  }, [transform, bounds, canvasDimensions, miniMapSize]);
 
   if (!miniMapLayout) return null;
 
@@ -145,8 +205,8 @@ export function HierarchyMiniMap({
           let nearestDistance = Infinity;
           
           miniMapLayout.nodes.forEach(node => {
-            const nodeX = node.y + 10;
-            const nodeY = node.x + 10;
+            const nodeX = layoutType === 'radial' ? node.x + 10 : node.y + 10;
+            const nodeY = layoutType === 'radial' ? node.y + 10 : node.x + 10;
             const distance = Math.sqrt(Math.pow(x - nodeX, 2) + Math.pow(y - nodeY, 2));
             
             if (distance < nearestDistance && distance < 15) {
@@ -185,22 +245,32 @@ export function HierarchyMiniMap({
           );
         })}
         
-        {/* Render links */}
-        {miniMapLayout.links.map((link, i) => (
-          <path
-            key={i}
-            d={`M${link.source.y + 10},${link.source.x + 10}L${link.target.y + 10},${link.target.x + 10}`}
-            stroke={link.target.data.type === 'custom' ? '#f97316' : '#cbd5e1'}
-            strokeWidth={link.target.data.type === 'custom' ? '1.5' : '0.5'}
-            opacity="0.6"
-          />
-        ))}
+        {/* Render links - adaptive coordinates */}
+        {miniMapLayout.links.map((link, i) => {
+          const sourceX = layoutType === 'radial' ? link.source.x + 10 : link.source.y + 10;
+          const sourceY = layoutType === 'radial' ? link.source.y + 10 : link.source.x + 10;
+          const targetX = layoutType === 'radial' ? link.target.x + 10 : link.target.y + 10;
+          const targetY = layoutType === 'radial' ? link.target.y + 10 : link.target.x + 10;
+          
+          return (
+            <path
+              key={i}
+              d={`M${sourceX},${sourceY}L${targetX},${targetY}`}
+              stroke={link.target.data.type === 'custom' ? '#f97316' : '#cbd5e1'}
+              strokeWidth={link.target.data.type === 'custom' ? '1.5' : '0.5'}
+              opacity="0.6"
+            />
+          );
+        })}
         
-        {/* Render nodes */}
+        {/* Render nodes - adaptive coordinates */}
         {miniMapLayout.nodes.map((node, i) => {
           const isSelected = selectedNode?.name === node.data.name;
           const isCustom = node.data.type === 'custom';
           const isFiltered = node.data._isFiltered;
+          
+          const nodeX = layoutType === 'radial' ? node.x + 10 : node.y + 10;
+          const nodeY = layoutType === 'radial' ? node.y + 10 : node.x + 10;
           
           let nodeColor = '#cbd5e1';
           let nodeSize = 2;
@@ -227,8 +297,8 @@ export function HierarchyMiniMap({
               {/* Selection indicator */}
               {isSelected && (
                 <circle
-                  cx={node.y + 10}
-                  cy={node.x + 10}
+                  cx={nodeX}
+                  cy={nodeY}
                   r={nodeSize + 2}
                   fill="none"
                   stroke="#374151"
@@ -240,8 +310,8 @@ export function HierarchyMiniMap({
               {/* Custom table glow in mini-map */}
               {isCustom && !isFiltered && (
                 <circle
-                  cx={node.y + 10}
-                  cy={node.x + 10}
+                  cx={nodeX}
+                  cy={nodeY}
                   r={nodeSize + 1}
                   fill="none"
                   stroke="#f97316"
@@ -252,8 +322,8 @@ export function HierarchyMiniMap({
               
               {/* Main node */}
               <circle
-                cx={node.y + 10}
-                cy={node.x + 10}
+                cx={nodeX}
+                cy={nodeY}
                 r={nodeSize}
                 fill={nodeColor}
                 opacity={isFiltered ? 0.3 : 0.9}

@@ -4,25 +4,16 @@ import {
   ZoomIn, 
   ZoomOut, 
   RotateCcw,
-  Network,
-  Target,
-  Sun,
   Filter,
-  Eye,
-  EyeOff,
   Search,
   Download,
   Maximize2,
-  Minimize2,
-  Settings
+  Minimize2
 } from 'lucide-react';
 import { GraphLayoutType } from './GraphControls';
+// RadialLayoutSettings import removed
 
 interface GraphSidebarOverlayProps {
-  // Layout controls
-  layoutType?: GraphLayoutType;
-  onLayoutChange?: (layout: GraphLayoutType) => void;
-  
   // Zoom controls
   onZoomIn?: () => void;
   onZoomOut?: () => void;
@@ -68,8 +59,6 @@ interface ControlGroup {
 }
 
 export function GraphSidebarOverlay({
-  layoutType = 'tree',
-  onLayoutChange,
   onZoomIn,
   onZoomOut,
   onResetView,
@@ -116,13 +105,6 @@ export function GraphSidebarOverlay({
     setHoveredGroup(null);
   };
 
-  const layoutIcons = {
-    'tree': Network,
-    'force-directed': Target,
-    'sunburst': Sun,
-    'radial': Network
-  };
-
   const controlGroups: ControlGroup[] = [
     {
       id: 'filter',
@@ -151,17 +133,6 @@ export function GraphSidebarOverlay({
           label: isFullscreen ? 'Exit Fullscreen' : 'Fullscreen', 
           action: () => onToggleFullscreen?.() 
         }
-      ]
-    },
-    {
-      id: 'layout',
-      icon: layoutIcons[layoutType],
-      label: 'Layout',
-      items: [
-        { icon: Network, label: 'Tree Layout', action: () => onLayoutChange?.('tree'), active: layoutType === 'tree' },
-        { icon: Target, label: 'Force-Directed', action: () => onLayoutChange?.('force-directed'), active: layoutType === 'force-directed' },
-        { icon: Sun, label: 'Sunburst', action: () => onLayoutChange?.('sunburst'), active: layoutType === 'sunburst' },
-        { icon: Network, label: 'Radial Layout', action: () => onLayoutChange?.('radial'), active: layoutType === 'radial' }
       ]
     },
     {
@@ -220,6 +191,8 @@ export function GraphSidebarOverlay({
                 <div className="text-xs font-medium text-gray-700 px-1 py-1 border-b border-gray-100 mb-1">
                   {group.label}
                 </div>
+                
+                {/* Standard menu items */}
                 {group.items.map((item, index) => (
                   <Button
                     key={index}
