@@ -305,18 +305,18 @@ export function CIRelationshipView() {
     });
 
     // Drag functions
-    function dragstarted(event: any, d: CINode) {
+    function dragstarted(event: d3.D3DragEvent<SVGGElement, CINode, CINode>, d: CINode) {
       if (!event.active) forceSimulation.alphaTarget(0.3).restart();
       d.fx = d.x;
       d.fy = d.y;
     }
 
-    function dragged(event: any, d: CINode) {
+    function dragged(event: d3.D3DragEvent<SVGGElement, CINode, CINode>, d: CINode) {
       d.fx = event.x;
       d.fy = event.y;
     }
 
-    function dragended(event: any, d: CINode) {
+    function dragended(event: d3.D3DragEvent<SVGGElement, CINode, CINode>, d: CINode) {
       if (!event.active) forceSimulation.alphaTarget(0);
       d.fx = null;
       d.fy = null;
@@ -326,7 +326,7 @@ export function CIRelationshipView() {
       tooltip.remove();
       forceSimulation.stop();
     };
-  }, [graphData, dimensions, setGraphStats]);
+  }, [graphData, dimensions, setGraphStats, performanceMonitor]);
 
   // Graph control handlers
   const handleZoomIn = () => {

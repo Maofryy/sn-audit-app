@@ -7,7 +7,8 @@ import {
   TableHierarchy, 
   GraphData, 
   CIRelationship, 
-  RelationshipType 
+  RelationshipType,
+  ServiceNowRecord 
 } from '../types';
 
 // Query Keys
@@ -179,7 +180,7 @@ export function useTableRecords(
   tableName: string,
   query?: string,
   limit: number = 100,
-  options?: Partial<UseQueryOptions<any[], Error>>
+  options?: Partial<UseQueryOptions<ServiceNowRecord[], Error>>
 ) {
   return useQuery({
     queryKey: queryKeys.tableRecords(tableName, query, limit),

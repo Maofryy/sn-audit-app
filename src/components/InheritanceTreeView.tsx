@@ -10,7 +10,8 @@ import { GraphLayoutType } from "./GraphControls";
 import { GraphSidebarOverlay } from "./GraphSidebarOverlay";
 import { TypesLegendCard } from "./TypesLegendCard";
 import { GraphSearchOverlay } from "./GraphSearchOverlay";
-import { VirtualizedRenderer, useVirtualizedPerformance } from "./VirtualizedRenderer";
+import { VirtualizedRenderer } from "./VirtualizedRenderer";
+import { useVirtualizedPerformance } from "../hooks/useVirtualizedPerformance";
 import { HierarchyMiniMap } from "./HierarchyMiniMap";
 import { PerformanceMonitor } from "@/utils/performanceMonitor";
 import { serviceNowService } from "@/services/serviceNowService";
@@ -65,8 +66,8 @@ export function InheritanceTreeView() {
 
     // Performance optimization state
     const [performanceMode, setPerformanceMode] = useState<"auto" | "high" | "maximum">("auto");
-    const [virtualizedNodes, setVirtualizedNodes] = useState<any[]>([]);
-    const [virtualizedLinks, setVirtualizedLinks] = useState<any[]>([]);
+    const [virtualizedNodes, setVirtualizedNodes] = useState<d3.HierarchyPointNode<TreeNodeData>[]>([]);
+    const [virtualizedLinks, setVirtualizedLinks] = useState<d3.HierarchyPointLink<TreeNodeData>[]>([]);
     const { measurePerformance } = useVirtualizedPerformance();
     const performanceMonitor = useRef(new PerformanceMonitor());
 
@@ -76,6 +77,21 @@ export function InheritanceTreeView() {
     const containerRef = useRef<HTMLDivElement>(null);
     const svgRef = useRef<SVGSVGElement>(null);
     const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+
+    // Convert hierarchy to tree structure
+    const convertHierarchyToTree = useCallback((node: { table: TableMetadata; children?: { table: TableMetadata; children?: unknown[]; customFieldCount?: number; totalRecordCount?: number }[]; customFieldCount?: number; totalRecordCount?: number }): TreeNodeData => {
+        const tableType = node.table.table_type || (node.table.is_custom ? "custom" : node.table.name === "cmdb_ci" || node.table.name === "cmdb" ? "base" : "extended");
+
+        return {
+            name: node.table.name,
+            label: node.table.label,
+            type: tableType,
+            table: node.table,
+            customFieldCount: node.customFieldCount,
+            recordCount: node.totalRecordCount,
+            children: node.children?.map(convertHierarchyToTree),
+        };
+    }, []);
 
     // Load ServiceNow table hierarchy with visual step progression
     useEffect(() => {
@@ -98,9 +114,12 @@ export function InheritanceTreeView() {
 
                 const treeStructure = convertHierarchyToTree(hierarchy.root);
 
+                console.log('📊 Tree structure built, setting treeData in 3 seconds...');
+
                 // Wait for visual progression to complete before showing result
                 setTimeout(() => {
                     if (isComponentMounted) {
+                        console.log('📊 Setting treeData now');
                         setTreeData(treeStructure);
                     }
                 }, Math.max(0, 3000 - Date.now() + performance.now()));
@@ -113,6 +132,7 @@ export function InheritanceTreeView() {
                 // Ensure loading state lasts at least 4 seconds for visual effect
                 setTimeout(() => {
                     if (isComponentMounted) {
+                        console.log('🔄 Setting loading to false');
                         setLoading(false);
                     }
                 }, 4000);
@@ -130,22 +150,7 @@ export function InheritanceTreeView() {
                 cleanup.then((cleanupFn) => cleanupFn && cleanupFn());
             }
         };
-    }, []);
-
-    // Convert hierarchy to tree structure
-    const convertHierarchyToTree = useCallback((node: { table: TableMetadata; children?: any[]; customFieldCount?: number; totalRecordCount?: number }): TreeNodeData => {
-        const tableType = node.table.table_type || (node.table.is_custom ? "custom" : node.table.name === "cmdb_ci" || node.table.name === "cmdb" ? "base" : "extended");
-
-        return {
-            name: node.table.name,
-            label: node.table.label,
-            type: tableType,
-            table: node.table,
-            customFieldCount: node.customFieldCount,
-            recordCount: node.totalRecordCount,
-            children: node.children?.map(convertHierarchyToTree),
-        };
-    }, []);
+    }, [convertHierarchyToTree]);
 
     // Apply visual filtering based on search and table type filters
     const applyVisualFiltering = useCallback(
@@ -196,22 +201,41 @@ export function InheritanceTreeView() {
 
     // Enhanced tree layout using modular layout algorithms
     const layoutResult = useMemo(() => {
-        if (!treeData) return null;
+        console.log('📐 Layout calculation triggered:', {
+            hasTreeData: !!treeData,
+            dimensions,
+            layoutType,
+            performanceMode
+        });
+
+        if (!treeData) {
+            console.log('📐 No treeData - layoutResult will be null');
+            return null;
+        }
 
         const visuallyFilteredTreeData = applyVisualFiltering(treeData);
         const layout = TreeLayoutFactory.getLayout(layoutType);
+        const result = layout.calculate(visuallyFilteredTreeData, dimensions, performanceMode);
+        
+        console.log('📐 Layout calculated:', {
+            nodeCount: result?.nodes?.length,
+            hasMargin: !!result?.margin,
+            bounds: result?.bounds
+        });
 
-        return layout.calculate(visuallyFilteredTreeData, dimensions, performanceMode);
+        return result;
     }, [treeData, dimensions, layoutType, applyVisualFiltering, performanceMode]);
 
     // Control handlers
     const handleZoomIn = () => {
+        console.log('🔍+ Zoom In clicked:', { hasZoomRef: !!zoomRef.current, hasSvgRef: !!svgRef.current });
         if (zoomRef.current && svgRef.current) {
             d3.select(svgRef.current).transition().duration(300).call(zoomRef.current.scaleBy, 1.5);
         }
     };
 
     const handleZoomOut = () => {
+        console.log('🔍- Zoom Out clicked:', { hasZoomRef: !!zoomRef.current, hasSvgRef: !!svgRef.current });
         if (zoomRef.current && svgRef.current) {
             d3.select(svgRef.current)
                 .transition()
@@ -222,34 +246,79 @@ export function InheritanceTreeView() {
 
     const handleResetView = () => {
         if (zoomRef.current && svgRef.current && layoutResult) {
-            // Calculate centered initial transform - smaller scale for massive graphs
-            let initialScale = Math.min(dimensions.width / layoutResult.bounds.width, dimensions.height / layoutResult.bounds.height, 1);
-
-            // Standard initial scale
-            initialScale = initialScale * 0.9;
-
-            const centerX = (dimensions.width - layoutResult.bounds.width * initialScale) / 2;
-            const centerY = (dimensions.height - layoutResult.bounds.height * initialScale) / 2;
-
-            const resetTransform = d3.zoomIdentity.translate(centerX, centerY).scale(initialScale);
-
-            d3.select(svgRef.current).transition().duration(500).call(zoomRef.current.transform, resetTransform);
+            // Find the root node (cmdb_ci) position for reset
+            const rootNode = layoutResult.nodes.find(node => node.data.name === 'cmdb_ci' || node.data.name === 'cmdb');
+            
+            if (rootNode) {
+                // Center on the root node with appropriate scale
+                let initialScale = Math.min(dimensions.width / layoutResult.bounds.width, dimensions.height / layoutResult.bounds.height, 1);
+                initialScale = Math.min(initialScale * 0.8, 1); // Conservative scale with padding
+                
+                // Calculate position to center the root node in the viewport
+                const rootX = rootNode.y + layoutResult.margin.left;
+                const rootY = rootNode.x + layoutResult.margin.top;
+                
+                // Center the root node in the middle of the container
+                const centerX = dimensions.width / 2 - rootX * initialScale;
+                const centerY = dimensions.height / 2 - rootY * initialScale;
+                
+                const resetTransform = d3.zoomIdentity.translate(centerX, centerY).scale(initialScale);
+                
+                d3.select(svgRef.current).transition().duration(500).call(zoomRef.current.transform, resetTransform);
+            } else {
+                // Fallback to bounds-based centering if root node not found
+                let initialScale = Math.min(dimensions.width / layoutResult.bounds.width, dimensions.height / layoutResult.bounds.height, 1);
+                initialScale = initialScale * 0.9;
+                
+                const centerX = (dimensions.width - layoutResult.bounds.width * initialScale) / 2;
+                const centerY = (dimensions.height - layoutResult.bounds.height * initialScale) / 2;
+                
+                const resetTransform = d3.zoomIdentity.translate(centerX, centerY).scale(initialScale);
+                
+                d3.select(svgRef.current).transition().duration(500).call(zoomRef.current.transform, resetTransform);
+            }
         }
         setSelectedNode(null);
         setHoveredNode(null);
         // The useEffect will automatically reset to default highlighting when selectedNode becomes null
     };
 
-    // Setup D3 zoom behavior with proper initial positioning
+    // Setup D3 zoom behavior ONLY after all data is loaded
     useEffect(() => {
-        if (!svgRef.current || !treeData || !layoutResult) return;
+        console.log('🔧 Zoom setup useEffect triggered:', {
+            hasSvgRef: !!svgRef.current,
+            hasTreeData: !!treeData,
+            hasLayoutResult: !!layoutResult,
+            dimensions,
+            loading,
+            svgElement: svgRef.current
+        });
+
+        // Wait for everything to be ready including loading state
+        if (!svgRef.current || !treeData || !layoutResult || dimensions.width === 0 || dimensions.height === 0 || loading) {
+            console.log('❌ Zoom setup aborted - missing requirements or still loading');
+            return;
+        }
+
+        console.log('✅ All requirements met - proceeding with zoom setup');
 
         const svg = d3.select(svgRef.current);
+        console.log('📊 D3 SVG selection:', svg.node(), svg.empty());
+        
+        // Clear any existing zoom behavior first
+        svg.on(".zoom", null);
+        console.log('🧹 Cleared existing zoom behavior');
 
         const zoom = d3
             .zoom<SVGSVGElement, unknown>()
             .scaleExtent([0.1, 10]) // Standard zoom range
             .on("zoom", (event) => {
+                console.log('🔄 Zoom event triggered:', {
+                    x: event.transform.x,
+                    y: event.transform.y,
+                    k: event.transform.k,
+                    sourceEvent: event.sourceEvent?.type
+                });
                 setTransform({
                     x: event.transform.x,
                     y: event.transform.y,
@@ -257,54 +326,133 @@ export function InheritanceTreeView() {
                 });
             });
 
-        svg.call(zoom);
+        console.log('⚙️ Zoom behavior created');
+
+        // Find the root node (cmdb_ci) position for initial centering
+        const rootNode = layoutResult.nodes.find(node => node.data.name === 'cmdb_ci' || node.data.name === 'cmdb');
+        console.log('🌳 Root node search:', {
+            found: !!rootNode,
+            rootNodeName: rootNode?.data.name,
+            totalNodes: layoutResult.nodes.length
+        });
+        
+        let initialTransform;
+        if (rootNode) {
+            // Center on the root node with appropriate scale
+            let initialScale = Math.min(dimensions.width / layoutResult.bounds.width, dimensions.height / layoutResult.bounds.height, 1);
+            initialScale = Math.min(initialScale * 0.8, 1); // Conservative scale with padding
+            
+            // Calculate position to center the root node in the viewport
+            const rootX = rootNode.y + layoutResult.margin.left;
+            const rootY = rootNode.x + layoutResult.margin.top;
+            
+            // Center the root node in the middle of the container
+            const centerX = dimensions.width / 2 - rootX * initialScale;
+            const centerY = dimensions.height / 2 - rootY * initialScale;
+            
+            initialTransform = d3.zoomIdentity.translate(centerX, centerY).scale(initialScale);
+            
+            console.log('🎯 Root-centered transform calculated:', {
+                rootPosition: { x: rootX, y: rootY },
+                center: { x: centerX, y: centerY },
+                scale: initialScale,
+                transform: { x: initialTransform.x, y: initialTransform.y, k: initialTransform.k }
+            });
+        } else {
+            // Fallback to bounds-based centering if root node not found
+            let initialScale = Math.min(dimensions.width / layoutResult.bounds.width, dimensions.height / layoutResult.bounds.height, 1);
+            initialScale = initialScale * 0.9;
+            
+            const centerX = (dimensions.width - layoutResult.bounds.width * initialScale) / 2;
+            const centerY = (dimensions.height - layoutResult.bounds.height * initialScale) / 2;
+            
+            initialTransform = d3.zoomIdentity.translate(centerX, centerY).scale(initialScale);
+            
+            console.log('📐 Bounds-centered transform calculated:', {
+                bounds: layoutResult.bounds,
+                center: { x: centerX, y: centerY },
+                scale: initialScale,
+                transform: { x: initialTransform.x, y: initialTransform.y, k: initialTransform.k }
+            });
+        }
+
+        // Store zoom reference immediately
         zoomRef.current = zoom;
+        console.log('💾 Zoom reference stored');
+        
+        // Set the initial transform state without triggering zoom behavior
+        setTransform({
+            x: initialTransform.x,
+            y: initialTransform.y,
+            k: initialTransform.k,
+        });
+        console.log('🎨 Transform state set');
 
-        // Center the graph initially with appropriate scale for massive graphs
-        let initialScale = Math.min(dimensions.width / layoutResult.bounds.width, dimensions.height / layoutResult.bounds.height, 1);
-
-        // Standard initial scale with padding
-        initialScale = initialScale * 0.9; // 90% to add some padding
-
-        const centerX = (dimensions.width - layoutResult.bounds.width * initialScale) / 2;
-        const centerY = (dimensions.height - layoutResult.bounds.height * initialScale) / 2;
-
-        const initialTransform = d3.zoomIdentity.translate(centerX, centerY).scale(initialScale);
-
-        svg.call(zoom.transform, initialTransform);
+        // Apply zoom behavior and set initial transform
+        try {
+            svg.call(zoom.transform, initialTransform).call(zoom);
+            console.log('✅ Zoom behavior and transform applied successfully');
+            
+            // Test if zoom is working by checking if mouse events are bound
+            setTimeout(() => {
+                const svgNode = svg.node() as SVGSVGElement;
+                if (svgNode) {
+                    console.log('🖱️ Testing zoom interactivity:', {
+                        hasZoomListeners: !!svgNode.__zoom,
+                        zoomTransform: d3.zoomTransform(svgNode),
+                        style: {
+                            pointerEvents: svgNode.style.pointerEvents,
+                            cursor: svgNode.style.cursor
+                        }
+                    });
+                }
+            }, 100);
+            
+        } catch (error) {
+            console.error('❌ Error applying zoom behavior:', error);
+        }
 
         return () => {
+            console.log('🧹 Cleaning up zoom behavior');
             svg.on(".zoom", null);
         };
-    }, [treeData, layoutResult, dimensions]);
+    }, [treeData, layoutResult, dimensions, loading]);
 
-    // Resize handler
+    // Resize handler with improved initial sizing
     useEffect(() => {
         let timeoutId: NodeJS.Timeout;
+        let rafId: number;
 
         const handleResize = () => {
             clearTimeout(timeoutId);
-            timeoutId = setTimeout(() => {
-                if (containerRef.current) {
-                    const rect = containerRef.current.getBoundingClientRect();
-                    const newWidth = Math.max(400, rect.width);
-                    const newHeight = Math.max(400, rect.height);
+            cancelAnimationFrame(rafId);
+            
+            // Use RAF to ensure DOM is ready
+            rafId = requestAnimationFrame(() => {
+                timeoutId = setTimeout(() => {
+                    if (containerRef.current) {
+                        const rect = containerRef.current.getBoundingClientRect();
+                        const newWidth = Math.max(400, rect.width || 800);
+                        const newHeight = Math.max(400, rect.height || 600);
 
-                    setDimensions((prev) => {
-                        if (Math.abs(prev.width - newWidth) > 10 || Math.abs(prev.height - newHeight) > 10) {
-                            return { width: newWidth, height: newHeight };
-                        }
-                        return prev;
-                    });
-                }
-            }, 150);
+                        setDimensions((prev) => {
+                            if (Math.abs(prev.width - newWidth) > 10 || Math.abs(prev.height - newHeight) > 10) {
+                                return { width: newWidth, height: newHeight };
+                            }
+                            return prev;
+                        });
+                    }
+                }, 150);
+            });
         };
 
-        handleResize();
+        // Initial sizing with delay to ensure DOM is ready
+        setTimeout(handleResize, 100);
         window.addEventListener("resize", handleResize);
 
         return () => {
             clearTimeout(timeoutId);
+            cancelAnimationFrame(rafId);
             window.removeEventListener("resize", handleResize);
         };
     }, []);
@@ -403,7 +551,7 @@ export function InheritanceTreeView() {
     };
 
     // Handle virtualized rendering updates
-    const handleVirtualizedRender = useCallback((nodes: any[], links: any[]) => {
+    const handleVirtualizedRender = useCallback((nodes: d3.HierarchyPointNode<TreeNodeData>[], links: d3.HierarchyPointLink<TreeNodeData>[]) => {
         setVirtualizedNodes(nodes);
         setVirtualizedLinks(links);
     }, []);
@@ -661,80 +809,134 @@ export function InheritanceTreeView() {
     if (loading) {
         return (
             <div className="w-full space-y-4">
-                <Card>
-                    <CardHeader className="pb-2">
-                        <CardTitle className="text-lg">CMDB Table Hierarchy</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="w-full rounded-lg bg-slate-50/50 relative flex items-center justify-center" style={{ height: "600px" }}>
-                            {/* Cinematic Loading Animation */}
-                            <div className="text-center w-full">
-                                {/* Infinite Cycling Text Animation */}
-                                <div className="h-12 flex items-center justify-center overflow-hidden relative w-full ">
-                                    <div className="text-lg font-medium text-gray-400 whitespace-nowrap animate-cycling-text relative w-80">
-                                        <span className="step-text">Connecting to ServiceNow</span>
-                                        <span className="step-text">Fetching CMDB Tables</span>
-                                        <span className="step-text">Building Hierarchy</span>
-                                        <span className="step-text">Preparing Visualization</span>
+                <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+                    {/* Main loading visualization */}
+                    <div className="lg:col-span-3">
+                        <Card>
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-lg">CMDB Table Hierarchy</CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="w-full rounded-lg bg-slate-50/50 relative flex items-center justify-center" style={{ height: "600px" }}>
+                                    {/* Cinematic Loading Animation */}
+                                    <div className="text-center w-full">
+                                        {/* Infinite Cycling Text Animation */}
+                                        <div className="h-12 flex items-center justify-center overflow-hidden relative w-full ">
+                                            <div className="text-lg font-medium text-gray-400 whitespace-nowrap animate-cycling-text relative w-80">
+                                                <span className="step-text">Connecting to ServiceNow</span>
+                                                <span className="step-text">Fetching CMDB Tables</span>
+                                                <span className="step-text">Building Hierarchy</span>
+                                                <span className="step-text">Preparing Visualization</span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* CSS for infinite cycling text animation */}
+                                    <style>{`
+                        .animate-cycling-text {
+                          position: relative;
+                          height: 1.5rem;
+                        }
+                        
+                        .step-text {
+                          position: absolute;
+                          top: 0;
+                          left: 40%;
+                          transform: translateX(-40%);
+                          opacity: 0;
+                          animation: textSlide 8s infinite ease-in-out;
+                        }
+                        
+                        .step-text:nth-child(1) { 
+                          animation-delay: 0s; 
+                        }
+                        .step-text:nth-child(2) { 
+                          animation-delay: 2s; 
+                        }
+                        .step-text:nth-child(3) { 
+                          animation-delay: 4s; 
+                        }
+                        .step-text:nth-child(4) { 
+                          animation-delay: 6s; 
+                        }
+                        
+                        @keyframes textSlide {
+                          0% {
+                            opacity: 0;
+                            transform: translateX(100%);
+                          }
+                          8.33% {
+                            opacity: 1;
+                            transform: translateX(-50%);
+                          }
+                          16.67% {
+                            opacity: 1;
+                            transform: translateX(-50%);
+                          }
+                          25% {
+                            opacity: 0;
+                            transform: translateX(-150%);
+                          }
+                          100% {
+                            opacity: 0;
+                            transform: translateX(-150%);
+                          }
+                        }
+                      `}</style>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    </div>
+
+                    {/* Skeleton loading for details panel */}
+                    <div className="lg:col-span-1">
+                        <Card className="w-full">
+                            <CardHeader>
+                                <CardTitle className="text-lg flex items-center gap-2">
+                                    <Database className="h-5 w-5" />
+                                    <Skeleton className="h-5 w-24" />
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent className="space-y-4">
+                                {/* Skeleton placeholder for table details */}
+                                <div className="space-y-4">
+                                    <div className="p-3 rounded-lg bg-slate-50 space-y-3">
+                                        <div className="space-y-2">
+                                            <Skeleton className="h-3 w-20" />
+                                            <Skeleton className="h-4 w-32" />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <Skeleton className="h-3 w-24" />
+                                            <Skeleton className="h-4 w-28" />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <Skeleton className="h-3 w-16" />
+                                            <Skeleton className="h-6 w-20" />
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="bg-slate-50 p-3 rounded-lg space-y-2">
+                                        <Skeleton className="h-3 w-16" />
+                                        <div className="space-y-2">
+                                            <div className="flex items-center gap-2">
+                                                <Skeleton className="w-3 h-3 rounded-full" />
+                                                <Skeleton className="h-3 w-32" />
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <Skeleton className="w-3 h-3 rounded-full" />
+                                                <Skeleton className="h-3 w-36" />
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <Skeleton className="w-3 h-3" />
+                                                <Skeleton className="h-3 w-28" />
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
-
-                            {/* CSS for infinite cycling text animation */}
-                            <style>{`
-                .animate-cycling-text {
-                  position: relative;
-                  height: 1.5rem;
-                }
-                
-                .step-text {
-                  position: absolute;
-                  top: 0;
-                  left: 40%;
-                  transform: translateX(-40%);
-                  opacity: 0;
-                  animation: textSlide 8s infinite ease-in-out;
-                }
-                
-                .step-text:nth-child(1) { 
-                  animation-delay: 0s; 
-                }
-                .step-text:nth-child(2) { 
-                  animation-delay: 2s; 
-                }
-                .step-text:nth-child(3) { 
-                  animation-delay: 4s; 
-                }
-                .step-text:nth-child(4) { 
-                  animation-delay: 6s; 
-                }
-                
-                @keyframes textSlide {
-                  0% {
-                    opacity: 0;
-                    transform: translateX(100%);
-                  }
-                  8.33% {
-                    opacity: 1;
-                    transform: translateX(-50%);
-                  }
-                  16.67% {
-                    opacity: 1;
-                    transform: translateX(-50%);
-                  }
-                  25% {
-                    opacity: 0;
-                    transform: translateX(-150%);
-                  }
-                  100% {
-                    opacity: 0;
-                    transform: translateX(-150%);
-                  }
-                }
-              `}</style>
-                        </div>
-                    </CardContent>
-                </Card>
+                            </CardContent>
+                        </Card>
+                    </div>
+                </div>
             </div>
         );
     }
@@ -819,8 +1021,16 @@ export function InheritanceTreeView() {
                                     ref={svgRef}
                                     width={dimensions.width}
                                     height={dimensions.height}
-                                    style={{ maxWidth: "100%", maxHeight: "100%" }}
+                                    style={{ 
+                                        width: '100%', 
+                                        height: '100%',
+                                        maxWidth: '100%', 
+                                        maxHeight: '100%'
+                                    }}
                                     className="cursor-grab border border-gray-200 rounded"
+                                    onMouseDown={(e) => console.log('🖱️ SVG mousedown:', e.nativeEvent)}
+                                    onWheel={(e) => console.log('🎡 SVG wheel:', e.nativeEvent)}
+                                    onMouseMove={(e) => console.log('🖱️ SVG mousemove:', e.nativeEvent)}
                                 >
                                     <g transform={`translate(${transform.x}, ${transform.y}) scale(${transform.k})`}>
                                         {/* Performance-optimized rendering */}

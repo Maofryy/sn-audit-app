@@ -43,7 +43,7 @@ export function testEnvironmentDetection() {
   };
 }
 
-function validateEnvironmentDetection(environment: string, config: any, info: any): boolean {
+function validateEnvironmentDetection(environment: string, config: Record<string, unknown>, info: Record<string, unknown>): boolean {
   // Validate the environment detection logic
   if (import.meta.env.DEV && environment !== 'development') {
     console.error('❌ Error: Dev mode should always be development environment');

@@ -51,26 +51,42 @@ export function ReferenceNetworkView() {
   const isComponentLoading = isGraphLoading || selectedTableDetails.isLoading;
   const componentError = graphError?.message || selectedTableDetails.error?.message || null;
 
-  // Handle container resize
+  // Handle container resize with improved initial sizing
   useEffect(() => {
+    let rafId: number;
+    let timeoutId: NodeJS.Timeout;
+    
     const handleResize = () => {
-      if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect();
-        setDimensions({
-          width: rect.width,
-          height: Math.max(400, rect.height)
-        });
-      }
+      cancelAnimationFrame(rafId);
+      clearTimeout(timeoutId);
+      
+      // Use RAF to ensure DOM is ready
+      rafId = requestAnimationFrame(() => {
+        if (containerRef.current) {
+          const rect = containerRef.current.getBoundingClientRect();
+          const newWidth = Math.max(400, rect.width || 800);
+          const newHeight = Math.max(400, rect.height || 600);
+          
+          setDimensions(prev => {
+            if (Math.abs(prev.width - newWidth) > 10 || Math.abs(prev.height - newHeight) > 10) {
+              return { width: newWidth, height: newHeight };
+            }
+            return prev;
+          });
+        }
+      });
     };
 
     window.addEventListener('resize', handleResize);
     
-    // Initial dimension calculation - use setTimeout to avoid setState in useEffect
-    setTimeout(() => {
-      handleResize();
-    }, 0);
+    // Initial dimension calculation with delay to ensure DOM is ready
+    timeoutId = setTimeout(handleResize, 100);
 
-    return () => window.removeEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      cancelAnimationFrame(rafId);
+      clearTimeout(timeoutId);
+    };
   }, []);
 
   // Initialize D3 force simulation
@@ -102,7 +118,7 @@ export function ReferenceNetworkView() {
       })
       .filter(Boolean) as D3Link[];
 
-    // Create zoom behavior
+    // Create zoom behavior with proper initialization
     const zoom = d3.zoom<SVGSVGElement, unknown>()
       .scaleExtent([0.1, 5])
       .on("zoom", (event) => {
@@ -111,10 +127,20 @@ export function ReferenceNetworkView() {
 
     svg.call(zoom);
     
-    // Use setTimeout to avoid setState in useEffect
-    setTimeout(() => {
-      setZoomBehavior(zoom);
-    }, 0);
+    // Set initial zoom behavior
+    setZoomBehavior(zoom);
+    
+    // Apply initial transform after a delay to ensure proper sizing
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        if (svgRef.current) {
+          const initialTransform = d3.zoomIdentity
+            .translate(width / 2, height / 2)
+            .scale(0.8);
+          d3.select(svgRef.current).call(zoom.transform, initialTransform);
+        }
+      }, 100);
+    });
 
     // Main group
     const g = svg.append("g");
@@ -279,18 +305,18 @@ export function ReferenceNetworkView() {
     });
 
     // Drag functions
-    function dragstarted(event: any, d: D3Node) {
+    function dragstarted(event: d3.D3DragEvent<SVGGElement, D3Node, D3Node>, d: D3Node) {
       if (!event.active) sim.alphaTarget(0.3).restart();
       d.fx = d.x;
       d.fy = d.y;
     }
 
-    function dragged(event: any, d: D3Node) {
+    function dragged(event: d3.D3DragEvent<SVGGElement, D3Node, D3Node>, d: D3Node) {
       d.fx = event.x;
       d.fy = event.y;
     }
 
-    function dragended(event: any, d: D3Node) {
+    function dragended(event: d3.D3DragEvent<SVGGElement, D3Node, D3Node>, d: D3Node) {
       if (!event.active) sim.alphaTarget(0);
       d.fx = null;
       d.fy = null;
@@ -487,8 +513,14 @@ export function ReferenceNetworkView() {
                 ) : (
                   <svg
                     ref={svgRef}
-                    width="100%"
-                    height="100%"
+                    width={dimensions.width}
+                    height={dimensions.height}
+                    style={{ 
+                      width: '100%', 
+                      height: '100%',
+                      maxWidth: '100%', 
+                      maxHeight: '100%'
+                    }}
                     className="cursor-grab active:cursor-grabbing"
                   />
                 )}

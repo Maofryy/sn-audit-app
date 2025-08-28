@@ -1,4 +1,5 @@
 import * as d3 from 'd3';
+import { GraphNode, GraphEdge } from '../types';
 
 // Performance thresholds
 export const PERFORMANCE_THRESHOLDS = {
@@ -30,7 +31,7 @@ export class CanvasNetworkRenderer {
     this.context.restore();
   }
 
-  renderNetwork(nodes: any[], links: any[]) {
+  renderNetwork(nodes: GraphNode[], links: GraphEdge[]) {
     this.clear();
     
     this.context.save();
@@ -46,7 +47,7 @@ export class CanvasNetworkRenderer {
     this.context.restore();
   }
 
-  private renderLinks(links: any[]) {
+  private renderLinks(links: GraphEdge[]) {
     this.context.strokeStyle = '#cbd5e1';
     this.context.lineWidth = 1.5;
 
@@ -58,7 +59,7 @@ export class CanvasNetworkRenderer {
     }
   }
 
-  private renderNodes(nodes: any[]) {
+  private renderNodes(nodes: GraphNode[]) {
     for (const node of nodes) {
       this.context.beginPath();
       this.context.arc(node.x, node.y, this.getNodeRadius(node), 0, 2 * Math.PI);
@@ -79,7 +80,7 @@ export class CanvasNetworkRenderer {
     }
   }
 
-  private renderNodeLabel(node: any) {
+  private renderNodeLabel(node: GraphNode) {
     this.context.fillStyle = '#374151';
     this.context.font = '10px sans-serif';
     this.context.textAlign = 'center';
@@ -91,20 +92,20 @@ export class CanvasNetworkRenderer {
     this.context.fillText(truncatedLabel, node.x, node.y);
   }
 
-  private getNodeRadius(node: any): number {
+  private getNodeRadius(node: GraphNode): number {
     if (node.table?.is_custom) return 8;
     if (node.table?.table_type === 'base') return 10;
     return 6;
   }
 
-  private getNodeColor(node: any): string {
+  private getNodeColor(node: GraphNode): string {
     if (!node.table) return '#64748b';
     if (node.table.is_custom) return '#ea580c';
     if (node.table.table_type === 'base') return '#3b82f6';
     return '#10b981';
   }
 
-  private getNodeBorderColor(node: any): string {
+  private getNodeBorderColor(node: GraphNode): string {
     if (!node.table) return '#475569';
     if (node.table.is_custom) return '#c2410c';
     if (node.table.table_type === 'base') return '#2563eb';
@@ -192,7 +193,7 @@ export class NetworkPerformanceMonitor {
 // Network optimization utilities
 export class NetworkOptimizer {
   // Reduce network complexity by removing low-importance edges
-  static optimizeNetwork(nodes: any[], edges: any[], maxEdges: number = 1000) {
+  static optimizeNetwork(nodes: GraphNode[], edges: GraphEdge[], maxEdges: number = 1000) {
     if (edges.length <= maxEdges) {
       return { nodes, edges };
     }
@@ -223,7 +224,7 @@ export class NetworkOptimizer {
     };
   }
 
-  private static calculateEdgeImportance(edge: any, nodes: any[]): number {
+  private static calculateEdgeImportance(edge: GraphEdge, nodes: GraphNode[]): number {
     let score = 0;
 
     // Inheritance relationships are more important
@@ -248,7 +249,7 @@ export class NetworkOptimizer {
   }
 
   // Clustering algorithm for very large networks
-  static clusterNodes(nodes: any[], edges: any[], maxClusters: number = 20) {
+  static clusterNodes(nodes: GraphNode[], edges: GraphEdge[], maxClusters: number = 20) {
     // Simple clustering based on connected components
     const clusters = new Map<string, Set<string>>();
     const nodeCluster = new Map<string, string>();

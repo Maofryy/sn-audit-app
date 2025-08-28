@@ -16,7 +16,7 @@ import {
 import { makeAuthenticatedRequest, testConnection as authTestConnection } from "./authService";
 
 export class ServiceNowService {
-    private requestCache = new Map<string, Promise<any>>();
+    private requestCache = new Map<string, Promise<unknown>>();
     private cacheTimeout = 5000; // 5 seconds deduplication window
 
     // Test connection using the authentication service
@@ -41,7 +41,7 @@ export class ServiceNowService {
         return promise;
     }
 
-    async getCurrentUser(): Promise<any> {
+    async getCurrentUser(): Promise<ServiceNowRecord | null> {
         const response = await makeAuthenticatedRequest("/api/now/table/sys_user/me", {
             method: "GET",
         });
@@ -55,7 +55,7 @@ export class ServiceNowService {
     }
 
     // Core API method using authentication service
-    private async makeRequest<T = any>(endpoint: string, options: RequestInit = {}): Promise<ServiceNowResponse<T>> {
+    private async makeRequest<T = ServiceNowRecord>(endpoint: string, options: RequestInit = {}): Promise<ServiceNowResponse<T>> {
         const response = await makeAuthenticatedRequest(endpoint, options);
 
         if (!response.ok) {
@@ -81,7 +81,7 @@ export class ServiceNowService {
             ];
 
             // Build nested queries up to 15 generations
-            for (let i = 2; i <= 15; i++) {
+            for (const i of Array.from({length: 14}, (_, k) => k + 2)) {
                 const depth = 'super_class.'.repeat(i);
                 generationQueries.push(`${depth}name=cmdb_ci`);
                 generationQueries.push(`${depth}name=cmdb`);
@@ -282,7 +282,7 @@ export class ServiceNowService {
         }
 
         // Interactive tree structure log - click to expand children
-        const createInteractiveTree = (node: TableNode): any => {
+        const createInteractiveTree = (node: TableNode): Record<string, unknown> => {
             return {
                 name: node.table.name,
                 label: node.table.label,
@@ -385,8 +385,8 @@ export class ServiceNowService {
     private async getCMDBTablesBatch(): Promise<TableMetadata[]> {
         const fields = "sys_id,name,label,super_class,sys_created_by,sys_created_on,sys_updated_on,sys_updated_by";
         const batchSize = 2000;
-        let allCmdbTables: TableMetadata[] = [];
-        let currentGeneration = ['cmdb_ci', 'cmdb'];
+        const allCmdbTables: TableMetadata[] = [];
+        let currentGeneration: string[] = ['cmdb_ci', 'cmdb'];
         
         while (currentGeneration.length > 0) {
             // Build query for current generation
@@ -474,11 +474,12 @@ export class ServiceNowService {
     // Utility Methods
     private mapToTableMetadata(record: ServiceNowRecord): TableMetadata {
         // Helper function to extract value from ServiceNow response objects
-        const getValue = (field: any): string | null => {
+        const getValue = (field: unknown): string | null => {
             if (!field) return null;
             if (typeof field === "string") return field;
-            if (typeof field === "object") {
-                return field.display_value || field.value || null;
+            if (typeof field === "object" && field !== null) {
+                const obj = field as Record<string, unknown>;
+                return (obj.display_value as string) || (obj.value as string) || null;
             }
             return null;
         };
@@ -518,18 +519,19 @@ export class ServiceNowService {
                 sys_created_by: sys_created_by,
                 sys_created_on: sys_created_on,
             } as TableMetadata),
-            table_type: this.determineTableType({ name, sys_created_by } as any),
+            table_type: this.determineTableType({ name, sys_created_by } as ServiceNowRecord),
             extends_hierarchy: [], // Will be populated by hierarchy building
         };
     }
 
     private mapToFieldMetadata(record: ServiceNowRecord): FieldMetadata {
         // Helper function to extract value from ServiceNow response objects
-        const getValue = (field: any): string | null => {
+        const getValue = (field: unknown): string | null => {
             if (!field) return null;
             if (typeof field === "string") return field;
-            if (typeof field === "object") {
-                return field.display_value || field.value || null;
+            if (typeof field === "object" && field !== null) {
+                const obj = field as Record<string, unknown>;
+                return (obj.display_value as string) || (obj.value as string) || null;
             }
             return null;
         };
@@ -619,7 +621,7 @@ export class ServiceNowService {
             return "base";
         }
 
-        if (this.isCustomTable(record as any)) {
+        if (this.isCustomTable(record as Partial<TableMetadata>)) {
             return "custom";
         }
 
@@ -628,7 +630,7 @@ export class ServiceNowService {
 
     // Record count methods
     async getRecordCount(tableName: string): Promise<number> {
-        const response = await this.makeRequest<any>(`/api/now/stats/${tableName}?sysparm_count=true`);
+        const response = await this.makeRequest<{stats: {count: number}}>(`/api/now/stats/${tableName}?sysparm_count=true`);
 
         return response.result?.stats?.count || 0;
     }

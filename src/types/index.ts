@@ -119,7 +119,7 @@ export interface AuditFinding {
   field_name?: string;
   recommendation: string;
   impact: string;
-  metadata: Record<string, any>;
+  metadata: Record<string, unknown>;
 }
 
 export interface CustomTableAuditResult {
@@ -180,7 +180,7 @@ export interface RiskFactor {
 }
 
 // API Response Types
-export interface ServiceNowResponse<T = any> {
+export interface ServiceNowResponse<T = ServiceNowRecord> {
   result: T[];
 }
 
@@ -190,7 +190,7 @@ export interface ServiceNowRecord {
   sys_created_by: string;
   sys_updated_on: string;
   sys_updated_by: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 // Graph Visualization Types
@@ -203,7 +203,7 @@ export interface GraphNode {
   y?: number;
   fx?: number;
   fy?: number;
-  metadata: Record<string, any>;
+  metadata: Record<string, unknown>;
 }
 
 export interface GraphEdge {
@@ -213,7 +213,7 @@ export interface GraphEdge {
   type: string;
   label?: string;
   strength?: number;
-  metadata: Record<string, any>;
+  metadata: Record<string, unknown>;
 }
 
 export interface GraphData {

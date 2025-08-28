@@ -99,17 +99,17 @@ export const useSessionAuth = () => isProduction();
 
 // Environment-specific console logging
 export const envLog = {
-    info: (message: string, ...args: any[]) => {
+    info: (message: string, ...args: unknown[]) => {
         if (isDevelopment()) {
             console.log(`[DEV] ${message}`, ...args);
         }
     },
-    warn: (message: string, ...args: any[]) => {
+    warn: (message: string, ...args: unknown[]) => {
         if (isDevelopment()) {
             console.warn(`[DEV] ${message}`, ...args);
         }
     },
-    error: (message: string, ...args: any[]) => {
+    error: (message: string, ...args: unknown[]) => {
         console.error(`[${detectEnvironment().toUpperCase()}] ${message}`, ...args);
     },
 };

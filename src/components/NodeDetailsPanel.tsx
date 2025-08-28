@@ -24,7 +24,7 @@ import { TableMetadata, FieldMetadata } from '../types';
 export interface NodeDetailsPanelProps {
   selectedTable?: TableMetadata | null;
   selectedTableId?: string;
-  tableDetails?: any;
+  tableDetails?: Record<string, unknown>;
   tableFields?: FieldMetadata[];
   childTables?: string[];
   parentTable?: string;
@@ -34,7 +34,7 @@ export interface NodeDetailsPanelProps {
   onClose?: () => void;
   onViewTable?: (tableName: string) => void;
   isLoading?: boolean;
-  error?: any;
+  error?: Error | string | null;
 }
 
 export function NodeDetailsPanel({

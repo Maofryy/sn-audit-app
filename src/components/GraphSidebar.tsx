@@ -189,7 +189,7 @@ export function GraphSidebar({
                         key={level}
                         size="sm"
                         variant={customTableEmphasis === level ? "default" : "ghost"}
-                        onClick={() => onCustomEmphasisChange?.(level as any)}
+                        onClick={() => onCustomEmphasisChange?.(level as 'subtle' | 'moderate' | 'maximum')}
                         className="flex-1 text-xs h-5 px-1"
                         title={`${level.charAt(0).toUpperCase() + level.slice(1)} emphasis`}
                       >

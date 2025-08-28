@@ -1,11 +1,12 @@
-import { useMemo, useEffect, useRef } from 'react';
+import { useMemo, useEffect, useRef, useCallback } from 'react';
 import * as d3 from 'd3';
+import { TreeNodeData } from '../utils/treeLayoutAlgorithms';
 
 interface VirtualizedNode {
   id: string;
   x: number;
   y: number;
-  data: any;
+  data: TreeNodeData;
   visible: boolean;
   lodLevel: 'full' | 'simplified' | 'minimal';
   priority: 'high' | 'medium' | 'low';
@@ -19,8 +20,8 @@ interface VirtualizedLink {
 }
 
 interface VirtualizedRendererProps {
-  nodes: d3.HierarchyPointNode<any>[];
-  links: d3.HierarchyPointLink<any>[];
+  nodes: d3.HierarchyPointNode<TreeNodeData>[];
+  links: d3.HierarchyPointLink<TreeNodeData>[];
   transform: { x: number; y: number; k: number };
   bounds: { width: number; height: number };
   customTableEmphasis: 'subtle' | 'moderate' | 'maximum';
@@ -59,10 +60,10 @@ export function VirtualizedRenderer({
       top: (-y / k) - buffer,
       bottom: (-y / k) + (bounds.height / k) + buffer
     };
-  }, [transform, bounds]);
+  }, [transform, bounds, PERFORMANCE_THRESHOLDS.VIEWPORT_BUFFER]);
 
   // Determine level of detail based on zoom and node count
-  const getLevelOfDetail = (node: any, zoom: number, nodeCount: number): 'full' | 'simplified' | 'minimal' => {
+  const getLevelOfDetail = useCallback((node: d3.HierarchyPointNode<TreeNodeData>, zoom: number, nodeCount: number): 'full' | 'simplified' | 'minimal' => {
     const isCustomTable = node.data?.type === 'custom';
     
     // Custom tables always get priority
@@ -84,10 +85,10 @@ export function VirtualizedRenderer({
     }
     
     return zoom < PERFORMANCE_THRESHOLDS.MIN_ZOOM_FOR_DETAILS ? 'simplified' : 'full';
-  };
+  }, [PERFORMANCE_THRESHOLDS.CUSTOM_TABLE_PRIORITY_ZOOM, PERFORMANCE_THRESHOLDS.ULTRA_HIGH_NODE_COUNT, PERFORMANCE_THRESHOLDS.HIGH_NODE_COUNT, PERFORMANCE_THRESHOLDS.MIN_ZOOM_FOR_DETAILS]);
 
   // Calculate node priority for rendering order
-  const getNodePriority = (node: any): 'high' | 'medium' | 'low' => {
+  const getNodePriority = (node: d3.HierarchyPointNode<TreeNodeData>): 'high' | 'medium' | 'low' => {
     if (node.data?.type === 'custom') return 'high';
     if (node.data?.type === 'base') return 'medium';
     return 'low';
@@ -128,7 +129,7 @@ export function VirtualizedRenderer({
         originalNode: node
       } as VirtualizedNode;
     }).filter(node => node.visible);
-  }, [nodes, getViewportBounds, transform.k]);
+  }, [nodes, getViewportBounds, transform.k, PERFORMANCE_THRESHOLDS.CUSTOM_TABLE_PRIORITY_ZOOM, getLevelOfDetail]);
 
   // Enhanced link processing with extended viewport for better zoom behavior
   const processVirtualizedLinks = useMemo(() => {
@@ -211,7 +212,7 @@ export function VirtualizedRenderer({
         originalLink: link
       } as VirtualizedLink;
     }).filter(link => link && link.visible);
-  }, [links, processVirtualizedNodes, transform, bounds, nodes]);
+  }, [links, processVirtualizedNodes, transform, bounds, nodes, PERFORMANCE_THRESHOLDS.CUSTOM_TABLE_PRIORITY_ZOOM, PERFORMANCE_THRESHOLDS.VIEWPORT_BUFFER]);
 
   // Intelligent rendering with requestAnimationFrame
   useEffect(() => {
@@ -256,39 +257,8 @@ export function VirtualizedRenderer({
       performanceLevel: totalNodes > PERFORMANCE_THRESHOLDS.ULTRA_HIGH_NODE_COUNT ? 'ultra-high' :
                        totalNodes > PERFORMANCE_THRESHOLDS.HIGH_NODE_COUNT ? 'high' : 'normal'
     };
-  }, [nodes.length, processVirtualizedNodes, transform.k]);
+  }, [nodes.length, processVirtualizedNodes, transform.k, PERFORMANCE_THRESHOLDS.HIGH_NODE_COUNT, PERFORMANCE_THRESHOLDS.ULTRA_HIGH_NODE_COUNT]);
 
   return null; // This is a logic component, no visual output
 }
 
-// Performance optimization hook
-export function useVirtualizedPerformance() {
-  const performanceRef = useRef({
-    frameTime: 0,
-    lastFrameTime: Date.now(),
-    averageFrameTime: 16, // Target 60fps
-    frameCount: 0
-  });
-
-  const measurePerformance = () => {
-    const now = Date.now();
-    const frameTime = now - performanceRef.current.lastFrameTime;
-    performanceRef.current.frameTime = frameTime;
-    performanceRef.current.frameCount++;
-    
-    // Calculate rolling average
-    performanceRef.current.averageFrameTime = 
-      (performanceRef.current.averageFrameTime * 0.9) + (frameTime * 0.1);
-    
-    performanceRef.current.lastFrameTime = now;
-    
-    return {
-      currentFPS: Math.round(1000 / frameTime),
-      averageFPS: Math.round(1000 / performanceRef.current.averageFrameTime),
-      frameTime: frameTime,
-      isPerformant: frameTime < 33 // 30fps threshold
-    };
-  };
-
-  return { measurePerformance };
-}

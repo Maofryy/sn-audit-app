@@ -2,12 +2,13 @@ import { useMemo, useRef, useEffect, useState } from 'react';
 import * as d3 from 'd3';
 import { Button } from '@/components/ui/button';
 import { Map as MapIcon, X } from 'lucide-react';
+import { TableMetadata } from '../types';
 
 interface TreeNodeData {
   name: string;
   label: string;
   type: 'base' | 'extended' | 'custom';
-  table?: any;
+  table?: TableMetadata;
   children?: TreeNodeData[];
   customFieldCount?: number;
   recordCount?: number;
@@ -39,7 +40,7 @@ export function HierarchyMiniMap({
 }: HierarchyMiniMapProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [isVisible, setIsVisible] = useState(defaultVisible);
-  const miniMapSize = { width: 200, height: 150 };
+  const miniMapSize = useMemo(() => ({ width: 200, height: 150 }), []);
   
   // Create mini-map layout - adaptive to main layout type
   const miniMapLayout = useMemo(() => {
@@ -124,7 +125,7 @@ export function HierarchyMiniMap({
     });
     
     return densityMap;
-  }, [miniMapLayout, miniMapSize]);
+  }, [miniMapLayout, miniMapSize, layoutType]);
 
   // Calculate viewport indicator with proper coordinate mapping
   const viewportIndicator = useMemo(() => {

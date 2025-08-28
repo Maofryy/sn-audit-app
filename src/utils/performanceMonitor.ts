@@ -48,9 +48,9 @@ export class PerformanceMonitor {
   }
   
   getMemoryUsage(): number {
-    // @ts-ignore - performance.memory is non-standard but widely supported
+    // @ts-expect-error - performance.memory is non-standard but widely supported
     if (performance.memory) {
-      // @ts-ignore
+      // @ts-expect-error - performance.memory is non-standard but widely supported
       return Math.round(performance.memory.usedJSHeapSize / 1024 / 1024);
     }
     return 0;
@@ -104,7 +104,7 @@ export class PerformanceMonitor {
   }
   
   // Performance testing simulation
-  static simulateLargeHierarchy(nodeCount: number = 1000): any[] {
+  static simulateLargeHierarchy(nodeCount: number = 1000): Record<string, unknown>[] {
     const nodes = [];
     const customTablePrefixes = ['u_', 'x_', 'custom_'];
     
