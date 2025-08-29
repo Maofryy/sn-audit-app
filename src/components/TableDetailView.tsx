@@ -7,12 +7,10 @@ import {
   Loader2, 
   AlertCircle, 
   Database, 
-  GitBranch,
   Settings,
   ZoomIn,
   ZoomOut,
   RotateCcw,
-  Info,
   TrendingUp,
   Shield,
   FileText
@@ -111,6 +109,7 @@ export function TableDetailView({ tableName, onClose }: TableDetailViewProps) {
         table,
         statistics,
         fields,
+        relationships, // Store raw relationships data
         quality_metrics: {
           table_name: tableName,
           completeness_score: 100,
@@ -473,49 +472,6 @@ export function TableDetailView({ tableName, onClose }: TableDetailViewProps) {
         </CardContent>
       </Card>
 
-      {/* Force Graph Visualization */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-2">
-              <GitBranch className="h-5 w-5" />
-              Reference Network
-              <Badge variant="outline">
-                {auditData.reference_graph.reference_edges.length} connections
-              </Badge>
-            </CardTitle>
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <div className="flex items-center gap-1">
-                <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
-                <span>Center Table</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <div className="w-3 h-3 bg-green-500 rounded-full"></div>
-                <span>Standard</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <div className="w-3 h-3 bg-orange-500 rounded-full"></div>
-                <span>Custom</span>
-              </div>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="border rounded-lg overflow-hidden">
-            <svg
-              ref={svgRef}
-              width={graphConfig.width}
-              height={graphConfig.height}
-              className="w-full h-auto"
-            />
-          </div>
-          <div className="mt-4 text-sm text-muted-foreground">
-            <Info className="h-4 w-4 inline mr-2" />
-            Drag nodes to reposition. Use mouse wheel to zoom. Center node (blue) represents the selected table.
-            Green connections are standard references, orange are custom references.
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }

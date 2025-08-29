@@ -101,7 +101,7 @@ export class ServiceNowService {
 
     async getTableSchema(tableName: string): Promise<FieldMetadata[]> {
         const fields = "sys_id,element,table,column_label,internal_type,max_length,mandatory,sys_created_by,sys_created_on,reference";
-        const response = await this.makeRequest<ServiceNowRecord>(`/api/now/table/sys_dictionary?sysparm_query=table=${tableName}&sysparm_limit=1000&sysparm_fields=${fields}`);
+        const response = await this.makeRequest<ServiceNowRecord>(`/api/now/table/sys_dictionary?sysparm_query=name=${tableName}&sysparm_limit=1000&sysparm_fields=${fields}`);
 
         return response.result.map((record) => this.mapToFieldMetadata(record));
     }
@@ -117,7 +117,7 @@ export class ServiceNowService {
     async getCustomFields(tableName?: string): Promise<FieldMetadata[]> {
         let query = this.buildCMDBInheritanceQuery('sys_dictionary');
         if (tableName) {
-            query = `table=${tableName}`;
+            query = `name=${tableName}`;
         }
 
         const fields = "sys_id,element,table,column_label,internal_type,max_length,mandatory,sys_created_by,sys_created_on,reference";
@@ -174,19 +174,35 @@ export class ServiceNowService {
         const cacheKey = `reference-relationships-${JSON.stringify(filter || {})}`;
         
         return this.deduplicatedRequest(cacheKey, async () => {
-            const cmdbQuery = this.buildCMDBInheritanceQuery('sys_dictionary');
-            let query = `internal_type=reference^${cmdbQuery}`;
+            let query = 'internal_type=reference';
             
-            // Apply filters to the query
+            // For bidirectional reference relationships, handle specific table filtering
             if (filter?.tableNames?.length) {
-                const tableFilter = filter.tableNames.map(name => `table=${name}`).join('^OR');
-                query += `^(${tableFilter})`;
+                // Build bidirectional reference query for each selected table
+                const bidirectionalQueries: string[] = [];
+                
+                for (const selectedTable of filter.tableNames) {
+                    // Query 1: References FROM selected table TO any table
+                    // Find all reference fields in the selected table
+                    const fromSelectedToAny = `name=${selectedTable}`;
+                    
+                    // Query 2: References FROM any table TO selected table  
+                    // Find all reference fields in any table that reference the selected table
+                    const fromAnyToSelected = `reference.name=${selectedTable}`;
+                    
+                    bidirectionalQueries.push(fromSelectedToAny, fromAnyToSelected);
+                }
+                
+                query += `^${bidirectionalQueries.join('^OR')}`;
+            } else {
+                // No table filter - get all reference relationships (optionally still filter by CMDB if needed)
+                const cmdbQuery = this.buildCMDBInheritanceQuery('sys_dictionary');
+                query += `^${cmdbQuery}`;
             }
             
+            // Apply additional filters without parentheses
             if (filter?.customOnly) {
-                const customPrefixes = filter.customOnly ? 
-                    '^(elementSTARTSWITHu_^ORelementSTARTSWITHx_^ORelementSTARTSWITHcustom_)' : '';
-                query += customPrefixes;
+                query += '^elementSTARTSWITHu_^ORelementSTARTSWITHx_^ORelementSTARTSWITHcustom_';
             }
             
             if (filter?.mandatoryOnly) {
@@ -200,12 +216,12 @@ export class ServiceNowService {
             
             if (filter?.createdBy?.length) {
                 const creatorFilter = filter.createdBy.map(creator => `sys_created_by=${creator}`).join('^OR');
-                query += `^(${creatorFilter})`;
+                query += `^${creatorFilter}`;
             }
 
             if (filter?.targetTables?.length) {
-                const targetFilter = filter.targetTables.map(table => `reference=${table}`).join('^OR');
-                query += `^(${targetFilter})`;
+                const targetFilter = filter.targetTables.map(table => `reference.name=${table}`).join('^OR');
+                query += `^${targetFilter}`;
             }
 
             const fields = "sys_id,element,table,column_label,internal_type,mandatory,sys_created_by,sys_created_on,reference";
@@ -760,11 +776,12 @@ export class ServiceNowService {
             }
             return generationQueries.join('^OR');
         } else {
-            // For sys_dictionary table queries - need to join with sys_db_object
-            const generationQueries = ['table.name=cmdb_ci'];
+            // For sys_dictionary table queries - name field contains the table name directly
+            // Use name= to match the table name value
+            const generationQueries = ['name=cmdb_ci'];
             for (const i of Array.from({length: 8}, (_, k) => k + 1)) {
                 const depth = 'super_class.'.repeat(i);
-                generationQueries.push(`table.${depth}name=cmdb_ci`);
+                generationQueries.push(`name.${depth}name=cmdb_ci`);
             }
             return generationQueries.join('^OR');
         }

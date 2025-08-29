@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 // Note: Switch component missing - using checkbox instead
 // Using basic HTML table instead of missing UI components
 import { useReferenceFieldsData } from '../hooks/useServiceNowData';
-import { ReferenceFieldFilter, ReferenceFieldRelationship } from '../types';
+import { ReferenceFieldFilter, ReferenceFieldRelationship, TableMetadata } from '../types';
 import { 
   Loader2, 
   AlertCircle, 
@@ -20,22 +20,35 @@ import {
   Calendar
 } from 'lucide-react';
 
-export function ReferenceFieldsDisplay() {
+interface ReferenceFieldsDisplayProps {
+  selectedTable?: string;
+  relationships?: ReferenceFieldRelationship[];
+  allTables?: TableMetadata[];
+  className?: string;
+}
+
+export function ReferenceFieldsDisplay({ 
+  selectedTable, 
+  relationships: providedRelationships, 
+  allTables, 
+  className 
+}: ReferenceFieldsDisplayProps = {}) {
   // Filter state
   const [filter, setFilter] = useState<ReferenceFieldFilter>({
     customOnly: false,
     mandatoryOnly: false,
     searchTerm: '',
+    ...(selectedTable && { tableNames: [selectedTable] })
   });
 
-  // Fetch data using our new hooks
-  const {
-    relationships,
-    networkData,
-    isLoading,
-    error,
-    hasData
-  } = useReferenceFieldsData(filter);
+  // Use provided data or fetch via hooks
+  const hookData = useReferenceFieldsData(providedRelationships ? {} : filter);
+  
+  const relationships = providedRelationships || hookData.relationships;
+  const networkData = hookData.networkData;
+  const isLoading = providedRelationships ? false : hookData.isLoading;
+  const error = hookData.error;
+  const hasData = providedRelationships ? providedRelationships.length > 0 : hookData.hasData;
 
   // Update filter functions
   const updateFilter = (updates: Partial<ReferenceFieldFilter>) => {
@@ -110,14 +123,17 @@ export function ReferenceFieldsDisplay() {
   const networkMeta = networkData.data?.metadata;
 
   return (
-    <div className="space-y-6">
+    <div className={`space-y-6 ${className || ''}`}>
       {/* Header with Statistics */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-2">
               <Database className="h-5 w-5" />
-              Reference Field Relationships
+              {selectedTable 
+                ? `Reference Network for ${selectedTable}` 
+                : 'Reference Field Relationships'
+              }
               <Badge variant="secondary">{relationshipsData.length} relationships</Badge>
             </CardTitle>
             <div className="flex gap-2">

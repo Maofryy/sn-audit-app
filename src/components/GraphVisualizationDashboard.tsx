@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { InheritanceTreeView } from './InheritanceTreeView';
-import { ReferenceNetworkView } from './ReferenceNetworkView';
+import { ReferenceFieldsDisplay } from './ReferenceFieldsDisplay';
 import { CMDBAuditDashboard } from './CMDBAuditDashboard';
 import { CIRelationshipView } from './CIRelationshipView';
 import { useGraph } from '../contexts/GraphContext';
@@ -110,7 +110,7 @@ export function GraphVisualizationDashboard({ isConnected }: GraphVisualizationD
         </TabsContent>
 
         <TabsContent value="references" className="space-y-4">
-          <ReferenceNetworkView />
+          <ReferenceFieldsDisplay />
         </TabsContent>
 
         <TabsContent value="audit" className="space-y-4">

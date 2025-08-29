@@ -332,6 +332,7 @@ export interface TableAuditData {
   quality_metrics: DataQualityMetrics;
   audit_kpis: AuditKPI[];
   reference_graph: ReferenceGraphData;
+  relationships: ReferenceFieldRelationship[]; // Raw relationships data
   ci_relationships?: CIRelationship[];
 }
 
