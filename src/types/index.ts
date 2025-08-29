@@ -55,6 +55,45 @@ export interface TableRelationship {
   strength: number; // for visualization layout
 }
 
+// Reference Field Relationship Types for Story 2.2
+export interface ReferenceFieldRelationship {
+  sys_id: string;
+  source_table: string;
+  target_table: string;
+  field_name: string;
+  field_label: string;
+  field_type: string;
+  is_mandatory: boolean;
+  is_custom: boolean;
+  created_by: string;
+  created_on: string;
+  relationship_strength: number; // 0-1 for graph layout
+  usage_count?: number; // how many records actually use this reference
+}
+
+export interface ReferenceNetworkData {
+  tables: TableMetadata[];
+  relationships: ReferenceFieldRelationship[];
+  metadata: {
+    total_tables: number;
+    total_references: number;
+    custom_references: number;
+    generated_at: Date;
+    relationship_types: Record<string, number>;
+  };
+}
+
+export interface ReferenceFieldFilter {
+  tableNames?: string[];
+  relationshipTypes?: ('extends' | 'references' | 'contains')[];
+  customOnly?: boolean;
+  mandatoryOnly?: boolean;
+  searchTerm?: string;
+  createdAfter?: Date;
+  createdBy?: string[];
+  targetTables?: string[];
+}
+
 export interface CIRelationship {
   sys_id: string;
   parent: string;
@@ -216,6 +255,23 @@ export interface GraphEdge {
   metadata: Record<string, unknown>;
 }
 
+// Enhanced Graph Types for Reference Field Networks
+export interface ReferenceGraphNode extends GraphNode {
+  referenceCount: number;
+  incomingReferences: number;
+  outgoingReferences: number;
+  customReferenceCount: number;
+}
+
+export interface ReferenceGraphEdge extends GraphEdge {
+  fieldName: string;
+  fieldLabel: string;
+  isCustom: boolean;
+  isMandatory: boolean;
+  usageCount?: number;
+  relationshipStrength: number;
+}
+
 export interface GraphData {
   nodes: GraphNode[];
   edges: GraphEdge[];
@@ -239,9 +295,190 @@ export interface FilterState {
   };
 }
 
+// Enhanced Filter State for Reference Networks
+export interface ReferenceFilterState extends FilterState {
+  mandatoryOnly: boolean;
+  targetTables: string[];
+  minimumUsageCount?: number;
+  relationshipStrengthRange?: {
+    min: number;
+    max: number;
+  };
+}
+
 export interface ViewMode {
   type: 'inheritance' | 'relationships' | 'audit' | 'reports';
   subview?: string;
+}
+
+// CMDB Audit System Types
+export interface TableStatistics {
+  table_name: string;
+  table_label: string;
+  total_references: number;
+  custom_references: number;
+  standard_references: number;
+  incoming_references: number;
+  outgoing_references: number;
+  mandatory_references: number;
+  record_count?: number;
+  last_updated: string;
+}
+
+export interface TableAuditData {
+  table: TableMetadata;
+  statistics: TableStatistics;
+  fields: FieldMetadata[];
+  quality_metrics: DataQualityMetrics;
+  audit_kpis: AuditKPI[];
+  reference_graph: ReferenceGraphData;
+  ci_relationships?: CIRelationship[];
+}
+
+export interface DataQualityMetrics {
+  table_name: string;
+  completeness_score: number; // 0-100
+  reference_integrity_score: number;
+  field_usage_stats: FieldUsageStats[];
+  null_value_percentages: Record<string, number>;
+  data_consistency_issues: DataConsistencyIssue[];
+  generated_at: Date;
+}
+
+export interface FieldUsageStats {
+  field_name: string;
+  field_label: string;
+  usage_percentage: number;
+  null_count: number;
+  populated_count: number;
+  unique_values_count?: number;
+}
+
+export interface DataConsistencyIssue {
+  type: 'missing_reference' | 'orphaned_reference' | 'invalid_data' | 'duplicate_reference';
+  field_name: string;
+  severity: 'low' | 'medium' | 'high';
+  count: number;
+  description: string;
+  sample_records?: string[];
+}
+
+export interface AuditKPI {
+  id: string;
+  name: string;
+  value: number | string;
+  unit?: string;
+  description: string;
+  status: 'good' | 'warning' | 'critical';
+  trend?: 'up' | 'down' | 'stable';
+  benchmark?: number;
+}
+
+export interface ReferenceGraphData {
+  center_table: TableMetadata;
+  connected_tables: TableMetadata[];
+  reference_edges: ReferenceGraphEdge[];
+  graph_metrics: GraphMetrics;
+}
+
+export interface GraphMetrics {
+  total_connections: number;
+  custom_connections: number;
+  complexity_score: number;
+  centrality_score: number;
+  cluster_coefficient: number;
+}
+
+// Enhanced Table List Types
+export interface TableListItem {
+  table: TableMetadata;
+  statistics: TableStatistics;
+  audit_status: 'compliant' | 'warning' | 'non_compliant';
+  last_analyzed: Date;
+  priority_score: number; // 0-100, higher = more important to audit
+}
+
+export interface TableListFilter {
+  search_term?: string;
+  table_types?: ('base' | 'extended' | 'custom')[];
+  audit_status?: ('compliant' | 'warning' | 'non_compliant')[];
+  min_references?: number;
+  max_references?: number;
+  custom_only?: boolean;
+  has_issues?: boolean;
+  created_after?: Date;
+  priority_range?: {min: number; max: number};
+}
+
+export interface TableListSortOptions {
+  field: 'name' | 'label' | 'total_references' | 'custom_references' | 'priority_score' | 'last_analyzed';
+  direction: 'asc' | 'desc';
+}
+
+// Audit Dashboard State Types
+export interface AuditDashboardState {
+  selectedTable?: string;
+  tableList: {
+    items: TableListItem[];
+    loading: boolean;
+    error?: string;
+    filters: TableListFilter;
+    sort: TableListSortOptions;
+    pagination: {
+      page: number;
+      per_page: number;
+      total: number;
+    };
+  };
+  tableDetail: {
+    data?: TableAuditData;
+    loading: boolean;
+    error?: string;
+  };
+  globalStats: {
+    total_cmdb_tables: number;
+    total_custom_tables: number;
+    total_references: number;
+    average_quality_score: number;
+    tables_needing_attention: number;
+  };
+}
+
+// Force Graph Specific Types
+export interface ForceGraphNode extends d3.SimulationNodeDatum {
+  id: string;
+  label: string;
+  type: 'center' | 'connected';
+  table: TableMetadata;
+  reference_count: number;
+  custom_reference_count: number;
+  is_custom: boolean;
+  size: number;
+  color: string;
+}
+
+export interface ForceGraphEdge extends d3.SimulationLinkDatum<ForceGraphNode> {
+  id: string;
+  source_table: string;
+  target_table: string;
+  field_name: string;
+  field_label: string;
+  is_custom: boolean;
+  is_mandatory: boolean;
+  strength: number;
+  color: string;
+  width: number;
+}
+
+export interface ForceGraphConfig {
+  width: number;
+  height: number;
+  charge: number;
+  distance: number;
+  collision_radius: number;
+  center_force: number;
+  show_labels: boolean;
+  highlight_custom: boolean;
 }
 
 // Cache Types

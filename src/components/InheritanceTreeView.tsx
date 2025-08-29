@@ -114,17 +114,14 @@ export function InheritanceTreeView() {
 
                 const treeStructure = convertHierarchyToTree(hierarchy.root);
 
-                console.log('📊 Tree structure built, setting treeData in 3 seconds...');
 
                 // Wait for visual progression to complete before showing result
                 setTimeout(() => {
                     if (isComponentMounted) {
-                        console.log('📊 Setting treeData now');
                         setTreeData(treeStructure);
                     }
                 }, Math.max(0, 3000 - Date.now() + performance.now()));
             } catch (err) {
-                console.error("Failed to load table hierarchy:", err);
                 if (isComponentMounted) {
                     setError(err instanceof Error ? err.message : "Failed to load data");
                 }
@@ -132,7 +129,6 @@ export function InheritanceTreeView() {
                 // Ensure loading state lasts at least 4 seconds for visual effect
                 setTimeout(() => {
                     if (isComponentMounted) {
-                        console.log('🔄 Setting loading to false');
                         setLoading(false);
                     }
                 }, 4000);
@@ -201,15 +197,8 @@ export function InheritanceTreeView() {
 
     // Enhanced tree layout using modular layout algorithms
     const layoutResult = useMemo(() => {
-        console.log('📐 Layout calculation triggered:', {
-            hasTreeData: !!treeData,
-            dimensions,
-            layoutType,
-            performanceMode
-        });
 
         if (!treeData) {
-            console.log('📐 No treeData - layoutResult will be null');
             return null;
         }
 
@@ -217,25 +206,18 @@ export function InheritanceTreeView() {
         const layout = TreeLayoutFactory.getLayout(layoutType);
         const result = layout.calculate(visuallyFilteredTreeData, dimensions, performanceMode);
         
-        console.log('📐 Layout calculated:', {
-            nodeCount: result?.nodes?.length,
-            hasMargin: !!result?.margin,
-            bounds: result?.bounds
-        });
 
         return result;
     }, [treeData, dimensions, layoutType, applyVisualFiltering, performanceMode]);
 
     // Control handlers
     const handleZoomIn = () => {
-        console.log('🔍+ Zoom In clicked:', { hasZoomRef: !!zoomRef.current, hasSvgRef: !!svgRef.current });
         if (zoomRef.current && svgRef.current) {
             d3.select(svgRef.current).transition().duration(300).call(zoomRef.current.scaleBy, 1.5);
         }
     };
 
     const handleZoomOut = () => {
-        console.log('🔍- Zoom Out clicked:', { hasZoomRef: !!zoomRef.current, hasSvgRef: !!svgRef.current });
         if (zoomRef.current && svgRef.current) {
             d3.select(svgRef.current)
                 .transition()
@@ -285,40 +267,22 @@ export function InheritanceTreeView() {
 
     // Setup D3 zoom behavior ONLY after all data is loaded
     useEffect(() => {
-        console.log('🔧 Zoom setup useEffect triggered:', {
-            hasSvgRef: !!svgRef.current,
-            hasTreeData: !!treeData,
-            hasLayoutResult: !!layoutResult,
-            dimensions,
-            loading,
-            svgElement: svgRef.current
-        });
 
         // Wait for everything to be ready including loading state
         if (!svgRef.current || !treeData || !layoutResult || dimensions.width === 0 || dimensions.height === 0 || loading) {
-            console.log('❌ Zoom setup aborted - missing requirements or still loading');
             return;
         }
 
-        console.log('✅ All requirements met - proceeding with zoom setup');
 
         const svg = d3.select(svgRef.current);
-        console.log('📊 D3 SVG selection:', svg.node(), svg.empty());
         
         // Clear any existing zoom behavior first
         svg.on(".zoom", null);
-        console.log('🧹 Cleared existing zoom behavior');
 
         const zoom = d3
             .zoom<SVGSVGElement, unknown>()
             .scaleExtent([0.1, 10]) // Standard zoom range
             .on("zoom", (event) => {
-                console.log('🔄 Zoom event triggered:', {
-                    x: event.transform.x,
-                    y: event.transform.y,
-                    k: event.transform.k,
-                    sourceEvent: event.sourceEvent?.type
-                });
                 setTransform({
                     x: event.transform.x,
                     y: event.transform.y,
@@ -326,15 +290,9 @@ export function InheritanceTreeView() {
                 });
             });
 
-        console.log('⚙️ Zoom behavior created');
 
         // Find the root node (cmdb_ci) position for initial centering
         const rootNode = layoutResult.nodes.find(node => node.data.name === 'cmdb_ci' || node.data.name === 'cmdb');
-        console.log('🌳 Root node search:', {
-            found: !!rootNode,
-            rootNodeName: rootNode?.data.name,
-            totalNodes: layoutResult.nodes.length
-        });
         
         let initialTransform;
         if (rootNode) {
@@ -352,12 +310,6 @@ export function InheritanceTreeView() {
             
             initialTransform = d3.zoomIdentity.translate(centerX, centerY).scale(initialScale);
             
-            console.log('🎯 Root-centered transform calculated:', {
-                rootPosition: { x: rootX, y: rootY },
-                center: { x: centerX, y: centerY },
-                scale: initialScale,
-                transform: { x: initialTransform.x, y: initialTransform.y, k: initialTransform.k }
-            });
         } else {
             // Fallback to bounds-based centering if root node not found
             let initialScale = Math.min(dimensions.width / layoutResult.bounds.width, dimensions.height / layoutResult.bounds.height, 1);
@@ -368,17 +320,10 @@ export function InheritanceTreeView() {
             
             initialTransform = d3.zoomIdentity.translate(centerX, centerY).scale(initialScale);
             
-            console.log('📐 Bounds-centered transform calculated:', {
-                bounds: layoutResult.bounds,
-                center: { x: centerX, y: centerY },
-                scale: initialScale,
-                transform: { x: initialTransform.x, y: initialTransform.y, k: initialTransform.k }
-            });
         }
 
         // Store zoom reference immediately
         zoomRef.current = zoom;
-        console.log('💾 Zoom reference stored');
         
         // Set the initial transform state without triggering zoom behavior
         setTransform({
@@ -386,34 +331,22 @@ export function InheritanceTreeView() {
             y: initialTransform.y,
             k: initialTransform.k,
         });
-        console.log('🎨 Transform state set');
 
         // Apply zoom behavior and set initial transform
         try {
             svg.call(zoom.transform, initialTransform).call(zoom);
-            console.log('✅ Zoom behavior and transform applied successfully');
             
             // Test if zoom is working by checking if mouse events are bound
             setTimeout(() => {
                 const svgNode = svg.node() as SVGSVGElement;
                 if (svgNode) {
-                    console.log('🖱️ Testing zoom interactivity:', {
-                        hasZoomListeners: !!svgNode.__zoom,
-                        zoomTransform: d3.zoomTransform(svgNode),
-                        style: {
-                            pointerEvents: svgNode.style.pointerEvents,
-                            cursor: svgNode.style.cursor
-                        }
-                    });
                 }
             }, 100);
             
         } catch (error) {
-            console.error('❌ Error applying zoom behavior:', error);
         }
 
         return () => {
-            console.log('🧹 Cleaning up zoom behavior');
             svg.on(".zoom", null);
         };
     }, [treeData, layoutResult, dimensions, loading]);
@@ -1028,9 +961,6 @@ export function InheritanceTreeView() {
                                         maxHeight: '100%'
                                     }}
                                     className="cursor-grab border border-gray-200 rounded"
-                                    onMouseDown={(e) => console.log('🖱️ SVG mousedown:', e.nativeEvent)}
-                                    onWheel={(e) => console.log('🎡 SVG wheel:', e.nativeEvent)}
-                                    onMouseMove={(e) => console.log('🖱️ SVG mousemove:', e.nativeEvent)}
                                 >
                                     <g transform={`translate(${transform.x}, ${transform.y}) scale(${transform.k})`}>
                                         {/* Performance-optimized rendering */}

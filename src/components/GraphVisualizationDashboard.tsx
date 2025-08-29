@@ -4,18 +4,19 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { InheritanceTreeView } from './InheritanceTreeView';
 import { ReferenceNetworkView } from './ReferenceNetworkView';
+import { CMDBAuditDashboard } from './CMDBAuditDashboard';
 import { CIRelationshipView } from './CIRelationshipView';
 import { useGraph } from '../contexts/GraphContext';
 import { Loader2, AlertCircle, CheckCircle } from 'lucide-react';
 
-type GraphViewType = 'inheritance' | 'references' | 'ci-relationships';
+type GraphViewType = 'inheritance' | 'references' | 'audit' | 'ci-relationships';
 
 interface GraphVisualizationDashboardProps {
   isConnected: boolean;
 }
 
 export function GraphVisualizationDashboard({ isConnected }: GraphVisualizationDashboardProps) {
-  const [activeView, setActiveView] = useState<GraphViewType>('inheritance');
+  const [activeView, setActiveView] = useState<GraphViewType>('audit');
   const { state } = useGraph();
 
   if (!isConnected) {
@@ -85,18 +86,22 @@ export function GraphVisualizationDashboard({ isConnected }: GraphVisualizationD
       </div>
 
       <Tabs value={activeView} onValueChange={(value) => setActiveView(value as GraphViewType)} className="w-full">
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="inheritance" className="relative">
-            Table Inheritance
-            <Badge variant="secondary" className="ml-2 text-xs">Story 2.1</Badge>
+            Inheritance
+            <Badge variant="secondary" className="ml-2 text-xs">2.1</Badge>
           </TabsTrigger>
           <TabsTrigger value="references" className="relative">
-            Reference Fields
-            <Badge variant="secondary" className="ml-2 text-xs">Story 2.2</Badge>
+            References
+            <Badge variant="secondary" className="ml-2 text-xs">2.2</Badge>
+          </TabsTrigger>
+          <TabsTrigger value="audit" className="relative">
+            Audit System
+            <Badge variant="default" className="ml-2 text-xs">New</Badge>
           </TabsTrigger>
           <TabsTrigger value="ci-relationships" className="relative">
-            CI Relationships
-            <Badge variant="secondary" className="ml-2 text-xs">Story 2.3</Badge>
+            CI Relations
+            <Badge variant="secondary" className="ml-2 text-xs">2.3</Badge>
           </TabsTrigger>
         </TabsList>
 
@@ -106,6 +111,10 @@ export function GraphVisualizationDashboard({ isConnected }: GraphVisualizationD
 
         <TabsContent value="references" className="space-y-4">
           <ReferenceNetworkView />
+        </TabsContent>
+
+        <TabsContent value="audit" className="space-y-4">
+          <CMDBAuditDashboard />
         </TabsContent>
 
         <TabsContent value="ci-relationships" className="space-y-4">

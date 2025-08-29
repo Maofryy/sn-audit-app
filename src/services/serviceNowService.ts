@@ -12,6 +12,11 @@ import {
     GraphData,
     GraphNode,
     GraphEdge,
+    ReferenceFieldRelationship,
+    ReferenceNetworkData,
+    ReferenceFieldFilter,
+    ReferenceGraphNode,
+    ReferenceGraphEdge,
 } from "../types";
 import { makeAuthenticatedRequest, testConnection as authTestConnection } from "./authService";
 
@@ -67,27 +72,12 @@ export class ServiceNowService {
 
     // CMDB Table Discovery Methods - Enhanced for complete hierarchy
     async getCMDBTables(): Promise<TableMetadata[]> {
-        const cacheKey = 'cmdb-tables-15gen';
+        const cacheKey = 'cmdb-tables-7gen';
         
         return this.deduplicatedRequest(cacheKey, async () => {
             const fields = "sys_id,name,label,super_class,sys_created_by,sys_created_on,sys_updated_on,sys_updated_by";
 
-            // Efficient query with 15 generations of CMDB inheritance
-            const generationQueries = [
-                'name=cmdb_ci',
-                'name=cmdb',
-                'super_class.name=cmdb_ci',
-                'super_class.name=cmdb'
-            ];
-
-            // Build nested queries up to 15 generations
-            for (const i of Array.from({length: 14}, (_, k) => k + 2)) {
-                const depth = 'super_class.'.repeat(i);
-                generationQueries.push(`${depth}name=cmdb_ci`);
-                generationQueries.push(`${depth}name=cmdb`);
-            }
-
-            const query = generationQueries.join('^OR');
+            const query = this.buildCMDBInheritanceQuery();
             
             const response = await this.makeRequest<ServiceNowRecord>(
                 `/api/now/table/sys_db_object?sysparm_query=${query}&sysparm_limit=10000&sysparm_fields=${fields}&sysparm_display_value=all`
@@ -125,7 +115,7 @@ export class ServiceNowService {
     }
 
     async getCustomFields(tableName?: string): Promise<FieldMetadata[]> {
-        let query = "tableLIKEcmdb";
+        let query = this.buildCMDBInheritanceQuery('sys_dictionary');
         if (tableName) {
             query = `table=${tableName}`;
         }
@@ -173,9 +163,313 @@ export class ServiceNowService {
 
     async getReferenceFields(): Promise<FieldMetadata[]> {
         const fields = "sys_id,element,table,column_label,internal_type,max_length,mandatory,sys_created_by,sys_created_on,reference";
-        const response = await this.makeRequest<ServiceNowRecord>(`/api/now/table/sys_dictionary?sysparm_query=internal_type=reference^tableLIKEcmdb&sysparm_limit=5000&sysparm_fields=${fields}`);
+        const cmdbQuery = this.buildCMDBInheritanceQuery('sys_dictionary');
+        const response = await this.makeRequest<ServiceNowRecord>(`/api/now/table/sys_dictionary?sysparm_query=internal_type=reference^${cmdbQuery}&sysparm_limit=5000&sysparm_fields=${fields}`);
 
         return response.result.map((record) => this.mapToFieldMetadata(record));
+    }
+
+    // Enhanced Reference Field Methods for Story 2.2
+    async getReferenceFieldRelationships(filter?: ReferenceFieldFilter): Promise<ReferenceFieldRelationship[]> {
+        const cacheKey = `reference-relationships-${JSON.stringify(filter || {})}`;
+        
+        return this.deduplicatedRequest(cacheKey, async () => {
+            const cmdbQuery = this.buildCMDBInheritanceQuery('sys_dictionary');
+            let query = `internal_type=reference^${cmdbQuery}`;
+            
+            // Apply filters to the query
+            if (filter?.tableNames?.length) {
+                const tableFilter = filter.tableNames.map(name => `table=${name}`).join('^OR');
+                query += `^(${tableFilter})`;
+            }
+            
+            if (filter?.customOnly) {
+                const customPrefixes = filter.customOnly ? 
+                    '^(elementSTARTSWITHu_^ORelementSTARTSWITHx_^ORelementSTARTSWITHcustom_)' : '';
+                query += customPrefixes;
+            }
+            
+            if (filter?.mandatoryOnly) {
+                query += '^mandatory=true';
+            }
+            
+            if (filter?.createdAfter) {
+                const dateStr = filter.createdAfter.toISOString().split('T')[0];
+                query += `^sys_created_on>${dateStr}`;
+            }
+            
+            if (filter?.createdBy?.length) {
+                const creatorFilter = filter.createdBy.map(creator => `sys_created_by=${creator}`).join('^OR');
+                query += `^(${creatorFilter})`;
+            }
+
+            if (filter?.targetTables?.length) {
+                const targetFilter = filter.targetTables.map(table => `reference=${table}`).join('^OR');
+                query += `^(${targetFilter})`;
+            }
+
+            const fields = "sys_id,element,table,column_label,internal_type,mandatory,sys_created_by,sys_created_on,reference";
+            const response = await this.makeRequest<ServiceNowRecord>(
+                `/api/now/table/sys_dictionary?sysparm_query=${encodeURIComponent(query)}&sysparm_limit=10000&sysparm_fields=${fields}&sysparm_display_value=all`
+            );
+
+            const relationships: ReferenceFieldRelationship[] = [];
+            
+            for (const record of response.result) {
+                const fieldMetadata = this.mapToFieldMetadata(record);
+                
+                if (fieldMetadata.reference_table && fieldMetadata.table) {
+                    // Apply client-side filters that couldn't be done in the query
+                    if (filter?.searchTerm) {
+                        const searchLower = filter.searchTerm.toLowerCase();
+                        const matchesSearch = 
+                            fieldMetadata.element.toLowerCase().includes(searchLower) ||
+                            fieldMetadata.column_label.toLowerCase().includes(searchLower) ||
+                            fieldMetadata.table.toLowerCase().includes(searchLower) ||
+                            fieldMetadata.reference_table.toLowerCase().includes(searchLower);
+                        
+                        if (!matchesSearch) continue;
+                    }
+
+                    const relationship: ReferenceFieldRelationship = {
+                        sys_id: fieldMetadata.sys_id,
+                        source_table: fieldMetadata.table,
+                        target_table: fieldMetadata.reference_table,
+                        field_name: fieldMetadata.element,
+                        field_label: fieldMetadata.column_label,
+                        field_type: fieldMetadata.type,
+                        is_mandatory: fieldMetadata.mandatory,
+                        is_custom: fieldMetadata.is_custom,
+                        created_by: fieldMetadata.sys_created_by,
+                        created_on: fieldMetadata.sys_created_on,
+                        relationship_strength: this.calculateRelationshipStrength(fieldMetadata),
+                    };
+
+                    relationships.push(relationship);
+                }
+            }
+
+            // Sort by relationship strength (strongest first) and then by table name
+            return relationships.sort((a, b) => {
+                if (b.relationship_strength !== a.relationship_strength) {
+                    return b.relationship_strength - a.relationship_strength;
+                }
+                return a.source_table.localeCompare(b.source_table);
+            });
+        });
+    }
+
+    async getReferenceNetworkData(filter?: ReferenceFieldFilter): Promise<ReferenceNetworkData> {
+        const cacheKey = `reference-network-${JSON.stringify(filter || {})}`;
+        
+        return this.deduplicatedRequest(cacheKey, async () => {
+            const [tables, relationships] = await Promise.all([
+                filter?.tableNames?.length ? 
+                    this.getCMDBTables().then(allTables => 
+                        allTables.filter(t => filter.tableNames!.includes(t.name))
+                    ) : 
+                    this.getCMDBTables(),
+                this.getReferenceFieldRelationships(filter)
+            ]);
+
+            // Filter tables to only include those that participate in relationships
+            const participatingTables = new Set<string>();
+            relationships.forEach(rel => {
+                participatingTables.add(rel.source_table);
+                participatingTables.add(rel.target_table);
+            });
+
+            const filteredTables = tables.filter(table => 
+                participatingTables.has(table.name)
+            );
+
+            // Calculate relationship type distribution
+            const relationshipTypes: Record<string, number> = {};
+            relationships.forEach(rel => {
+                const key = rel.is_custom ? 'custom_references' : 'standard_references';
+                relationshipTypes[key] = (relationshipTypes[key] || 0) + 1;
+                
+                if (rel.is_mandatory) {
+                    relationshipTypes['mandatory_references'] = (relationshipTypes['mandatory_references'] || 0) + 1;
+                }
+            });
+
+            return {
+                tables: filteredTables,
+                relationships,
+                metadata: {
+                    total_tables: filteredTables.length,
+                    total_references: relationships.length,
+                    custom_references: relationships.filter(r => r.is_custom).length,
+                    generated_at: new Date(),
+                    relationship_types: relationshipTypes,
+                },
+            };
+        });
+    }
+
+    async generateReferenceNetworkGraph(filter?: ReferenceFieldFilter): Promise<{ nodes: ReferenceGraphNode[]; edges: ReferenceGraphEdge[] }> {
+        const networkData = await this.getReferenceNetworkData(filter);
+        
+        // Create enhanced nodes with reference statistics
+        const nodeStats = new Map<string, {
+            incoming: number;
+            outgoing: number;
+            customIncoming: number;
+            customOutgoing: number;
+        }>();
+
+        // Initialize node stats
+        networkData.tables.forEach(table => {
+            nodeStats.set(table.name, {
+                incoming: 0,
+                outgoing: 0,
+                customIncoming: 0,
+                customOutgoing: 0,
+            });
+        });
+
+        // Calculate reference statistics
+        networkData.relationships.forEach(rel => {
+            const sourceStats = nodeStats.get(rel.source_table);
+            const targetStats = nodeStats.get(rel.target_table);
+
+            if (sourceStats) {
+                sourceStats.outgoing++;
+                if (rel.is_custom) sourceStats.customOutgoing++;
+            }
+
+            if (targetStats) {
+                targetStats.incoming++;
+                if (rel.is_custom) targetStats.customIncoming++;
+            }
+        });
+
+        // Create enhanced nodes
+        const nodes: ReferenceGraphNode[] = networkData.tables.map(table => {
+            const stats = nodeStats.get(table.name) || { incoming: 0, outgoing: 0, customIncoming: 0, customOutgoing: 0 };
+            
+            return {
+                id: table.name,
+                label: table.label,
+                type: "table" as const,
+                table,
+                referenceCount: stats.incoming + stats.outgoing,
+                incomingReferences: stats.incoming,
+                outgoingReferences: stats.outgoing,
+                customReferenceCount: stats.customIncoming + stats.customOutgoing,
+                metadata: {
+                    isCustom: table.is_custom,
+                    recordCount: table.record_count,
+                    tableType: table.table_type,
+                    stats,
+                },
+            };
+        });
+
+        // Create enhanced edges
+        const edges: ReferenceGraphEdge[] = networkData.relationships.map(rel => ({
+            id: `${rel.source_table}-${rel.target_table}-${rel.field_name}`,
+            source: rel.source_table,
+            target: rel.target_table,
+            type: "references",
+            label: rel.field_label || rel.field_name,
+            strength: rel.relationship_strength,
+            fieldName: rel.field_name,
+            fieldLabel: rel.field_label,
+            isCustom: rel.is_custom,
+            isMandatory: rel.is_mandatory,
+            relationshipStrength: rel.relationship_strength,
+            metadata: {
+                relationshipType: "reference",
+                fieldType: rel.field_type,
+                createdBy: rel.created_by,
+                createdOn: rel.created_on,
+            },
+        }));
+
+        return { nodes, edges };
+    }
+
+    // Get usage statistics for reference fields (if data available)
+    async getReferenceFieldUsage(tableName: string, fieldName: string): Promise<number | null> {
+        try {
+            const response = await this.makeRequest<{stats: {count: number}}>(
+                `/api/now/stats/${tableName}?sysparm_count=true&sysparm_query=${fieldName}ISNOTEMPTY`
+            );
+            
+            return response.result?.stats?.count || 0;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    // Enhanced reference field analysis methods
+    async analyzeReferenceFieldComplexity(relationships: ReferenceFieldRelationship[]): Promise<{
+        highComplexityTables: string[];
+        circularReferences: string[][];
+        isolatedTables: string[];
+        hubTables: string[];
+    }> {
+        const incomingCounts = new Map<string, number>();
+        const outgoingCounts = new Map<string, number>();
+        const allTables = new Set<string>();
+
+        // Count relationships
+        relationships.forEach(rel => {
+            allTables.add(rel.source_table);
+            allTables.add(rel.target_table);
+            
+            outgoingCounts.set(rel.source_table, (outgoingCounts.get(rel.source_table) || 0) + 1);
+            incomingCounts.set(rel.target_table, (incomingCounts.get(rel.target_table) || 0) + 1);
+        });
+
+        // Identify high complexity tables (>10 references total)
+        const highComplexityTables = Array.from(allTables).filter(table => {
+            const totalRefs = (incomingCounts.get(table) || 0) + (outgoingCounts.get(table) || 0);
+            return totalRefs > 10;
+        });
+
+        // Identify hub tables (>5 incoming references)
+        const hubTables = Array.from(allTables).filter(table => 
+            (incomingCounts.get(table) || 0) > 5
+        );
+
+        // Identify isolated tables (no references)
+        const isolatedTables = Array.from(allTables).filter(table =>
+            (incomingCounts.get(table) || 0) === 0 && (outgoingCounts.get(table) || 0) === 0
+        );
+
+        // Simple circular reference detection (direct cycles)
+        const circularReferences: string[][] = [];
+        const relationshipMap = new Map<string, string[]>();
+        
+        relationships.forEach(rel => {
+            if (!relationshipMap.has(rel.source_table)) {
+                relationshipMap.set(rel.source_table, []);
+            }
+            relationshipMap.get(rel.source_table)!.push(rel.target_table);
+        });
+
+        // Check for direct circular references
+        relationships.forEach(rel => {
+            const reverseRefs = relationshipMap.get(rel.target_table) || [];
+            if (reverseRefs.includes(rel.source_table)) {
+                const cycle = [rel.source_table, rel.target_table];
+                if (!circularReferences.some(existing => 
+                    existing.length === 2 && existing.includes(cycle[0]) && existing.includes(cycle[1])
+                )) {
+                    circularReferences.push(cycle);
+                }
+            }
+        });
+
+        return {
+            highComplexityTables,
+            circularReferences,
+            isolatedTables,
+            hubTables,
+        };
     }
 
     // Table Hierarchy Building
@@ -209,13 +503,11 @@ export class ServiceNowService {
         const calculateDepth = (node: TableNode, path: Set<string> = new Set()): number => {
             // Prevent infinite recursion - max depth limit
             if (path.size > 20) {
-                console.warn(`Maximum depth exceeded for table: ${node.table.name}`);
                 return 20;
             }
 
             // Cycle detection
             if (path.has(node.table.name)) {
-                console.warn(`Circular reference detected in hierarchy for table: ${node.table.name}`);
                 return path.size;
             }
 
@@ -298,11 +590,6 @@ export class ServiceNowService {
         };
 
         const interactiveTree = createInteractiveTree(root);
-        console.log("🌳 CMDB Hierarchy - Click objects to expand:", {
-            totalTables: tables.length,
-            relationships: relationshipsFound,
-            rootTable: interactiveTree
-        });
 
         return {
             root,
@@ -460,18 +747,29 @@ export class ServiceNowService {
             depthDistribution.set(depth, (depthDistribution.get(depth) || 0) + 1);
         });
 
-        // Log results
-        console.log('🏗️ CMDB Hierarchy Analysis:');
-        console.log(`📊 Total CMDB tables: ${tables.length}`);
-        console.log(`📏 Maximum generation depth: ${maxDepth} (${deepestTable})`);
-        console.log(`📈 Generation distribution:`, Object.fromEntries(depthDistribution));
-        
-        if (maxDepth >= 14) {
-            console.warn('⚠️ Maximum depth approaching 15-generation limit. Consider increasing if needed.');
-        }
     }
 
     // Utility Methods
+    private buildCMDBInheritanceQuery(context: 'sys_db_object' | 'sys_dictionary' = 'sys_db_object'): string {
+        if (context === 'sys_db_object') {
+            // For sys_db_object table queries
+            const generationQueries = ['name=cmdb_ci'];
+            for (const i of Array.from({length: 8}, (_, k) => k + 1)) {
+                const depth = 'super_class.'.repeat(i);
+                generationQueries.push(`${depth}name=cmdb_ci`);
+            }
+            return generationQueries.join('^OR');
+        } else {
+            // For sys_dictionary table queries - need to join with sys_db_object
+            const generationQueries = ['table.name=cmdb_ci'];
+            for (const i of Array.from({length: 8}, (_, k) => k + 1)) {
+                const depth = 'super_class.'.repeat(i);
+                generationQueries.push(`table.${depth}name=cmdb_ci`);
+            }
+            return generationQueries.join('^OR');
+        }
+    }
+
     private mapToTableMetadata(record: ServiceNowRecord): TableMetadata {
         // Helper function to extract value from ServiceNow response objects
         const getValue = (field: unknown): string | null => {
@@ -626,6 +924,30 @@ export class ServiceNowService {
         }
 
         return "extended";
+    }
+
+    // Helper method to calculate relationship strength for graph layout
+    private calculateRelationshipStrength(field: FieldMetadata): number {
+        let strength = 0.5; // Base strength for reference fields
+        
+        // Mandatory fields have stronger relationships
+        if (field.mandatory) {
+            strength += 0.3;
+        }
+        
+        // Custom fields are considered less critical for layout
+        if (field.is_custom) {
+            strength -= 0.2;
+        }
+        
+        // System/core tables have stronger relationships
+        const coreTablePatterns = [/^cmdb_ci/, /^sys_/, /^core_/, /^cmn_/];
+        if (coreTablePatterns.some(pattern => pattern.test(field.table))) {
+            strength += 0.2;
+        }
+        
+        // Normalize to 0-1 range
+        return Math.max(0.1, Math.min(1.0, strength));
     }
 
     // Record count methods

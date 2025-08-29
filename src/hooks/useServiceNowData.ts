@@ -8,7 +8,12 @@ import {
   GraphData, 
   CIRelationship, 
   RelationshipType,
-  ServiceNowRecord 
+  ServiceNowRecord,
+  ReferenceFieldRelationship,
+  ReferenceNetworkData,
+  ReferenceFieldFilter,
+  ReferenceGraphNode,
+  ReferenceGraphEdge
 } from '../types';
 
 // Query Keys
@@ -27,6 +32,14 @@ export const queryKeys = {
     ['ci-relationships', parentId, childId] as const,
   relationshipTypes: ['relationship-types'] as const,
   referenceFields: ['reference-fields'] as const,
+  
+  // Reference Field Relationships (Story 2.2)
+  referenceFieldRelationships: (filter?: ReferenceFieldFilter) => 
+    ['reference-field-relationships', filter] as const,
+  referenceNetworkData: (filter?: ReferenceFieldFilter) => 
+    ['reference-network-data', filter] as const,
+  referenceNetworkGraph: (filter?: ReferenceFieldFilter) => 
+    ['reference-network-graph', filter] as const,
   
   // Graph Data
   graphData: (includeReferences: boolean = true) => 
@@ -282,5 +295,61 @@ export function useGraphViewData(viewType: 'inheritance' | 'references' | 'ci-re
       hierarchyQuery.error || 
       relationshipTypesQuery.error ||
       ciRelationshipsQuery.error,
+  };
+}
+
+// Reference Field Relationship Hooks (Story 2.2)
+export function useReferenceFieldRelationships(
+  filter?: ReferenceFieldFilter,
+  options?: Partial<UseQueryOptions<ReferenceFieldRelationship[], Error>>
+) {
+  return useQuery({
+    queryKey: queryKeys.referenceFieldRelationships(filter),
+    queryFn: () => serviceNowService.getReferenceFieldRelationships(filter),
+    ...baseQueryOptions,
+    staleTime: 1000 * 60 * 10, // 10 minutes - reference fields change less frequently
+    ...options,
+  });
+}
+
+export function useReferenceNetworkData(
+  filter?: ReferenceFieldFilter,
+  options?: Partial<UseQueryOptions<ReferenceNetworkData, Error>>
+) {
+  return useQuery({
+    queryKey: queryKeys.referenceNetworkData(filter),
+    queryFn: () => serviceNowService.getReferenceNetworkData(filter),
+    ...baseQueryOptions,
+    staleTime: 1000 * 60 * 10, // 10 minutes
+    ...options,
+  });
+}
+
+export function useReferenceNetworkGraph(
+  filter?: ReferenceFieldFilter,
+  options?: Partial<UseQueryOptions<{ nodes: ReferenceGraphNode[]; edges: ReferenceGraphEdge[] }, Error>>
+) {
+  return useQuery({
+    queryKey: queryKeys.referenceNetworkGraph(filter),
+    queryFn: () => serviceNowService.generateReferenceNetworkGraph(filter),
+    ...baseQueryOptions,
+    staleTime: 1000 * 60 * 10, // 10 minutes
+    ...options,
+  });
+}
+
+// Composite hook for Reference Fields view
+export function useReferenceFieldsData(filter?: ReferenceFieldFilter) {
+  const relationshipsQuery = useReferenceFieldRelationships(filter);
+  const networkDataQuery = useReferenceNetworkData(filter);
+  const networkGraphQuery = useReferenceNetworkGraph(filter);
+
+  return {
+    relationships: relationshipsQuery,
+    networkData: networkDataQuery,
+    networkGraph: networkGraphQuery,
+    isLoading: relationshipsQuery.isLoading || networkDataQuery.isLoading || networkGraphQuery.isLoading,
+    error: relationshipsQuery.error || networkDataQuery.error || networkGraphQuery.error,
+    hasData: !!relationshipsQuery.data?.length || !!networkDataQuery.data?.relationships.length,
   };
 }

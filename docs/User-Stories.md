@@ -53,7 +53,7 @@
 
 ## Epic 2: CMDB Structure Visualization
 
-### Story 2.1: As a CMDB analyst, I want to see a visual map of table inheritance relationships
+### Story 2.1: As a CMDB analyst, I want to see a visual map of table inheritance relationships [DONE]
 
 **Priority**: Must Have  
 **Effort**: 8 points
